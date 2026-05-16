@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react';
-import { Flame, Calendar, ArrowRight, Zap, Trophy, Crown, Medal } from 'lucide-react';
+import { Flame, Calendar, ArrowRight, Zap, Trophy, Crown, Medal, Scale, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 import { BodyMap } from '../components/BodyMap';
 import type { WorkoutEntry } from '../data/seedData';
+import { useBodyWeight } from '../hooks/useBodyWeight';
+import { LineChart, Line, ResponsiveContainer } from 'recharts';
 
 interface Props {
   workouts: WorkoutEntry[];
@@ -51,6 +53,10 @@ function Mascot({ type }: { type: string }) {
 
 export function HomeView({ workouts, onStartTraining }: Props) {
   const [selectedWeek, setSelectedWeek] = useState<number | null>(null);
+  const { entries: bwEntries, addEntry: bwAdd, deleteEntry: bwDelete } = useBodyWeight();
+  const [bwDate, setBwDate] = useState(new Date().toISOString().split('T')[0]);
+  const [bwWeight, setBwWeight] = useState('');
+  const [bwExpanded, setBwExpanded] = useState(true);
 
   const stats = useMemo(() => {
     const total = workouts.length;
@@ -200,6 +206,79 @@ export function HomeView({ workouts, onStartTraining }: Props) {
 
       {/* BODY MAP */}
       <BodyMap workouts={workouts} />
+
+      {/* BODY WEIGHT TRACKER */}
+      <div className="brutal-card-sm p-3 mt-5 animate-slide-up stagger-2">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <Scale className="w-4 h-4 text-accent" />
+            <h3 className="text-xs font-bold text-text font-display tracking-wider uppercase">Körpergewicht</h3>
+          </div>
+          <button onClick={() => setBwExpanded(!bwExpanded)}
+            className="text-text-muted hover:text-text transition-colors">
+            {bwExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
+        </div>
+
+        {bwExpanded && (
+          <>
+            <div className="flex gap-2 mb-3">
+              <input type="date" value={bwDate}
+                onChange={e => setBwDate(e.target.value)}
+                className="brutal-input px-2 py-2 text-xs font-mono flex-1" />
+              <input type="number" inputMode="decimal" placeholder="kg"
+                value={bwWeight}
+                onChange={e => setBwWeight(e.target.value)}
+                className="brutal-input w-20 px-2 py-2 text-sm text-center font-mono" />
+              <button
+                onClick={() => {
+                  const w = parseFloat(bwWeight);
+                  if (!isNaN(w) && w > 0) {
+                    bwAdd(bwDate, w);
+                    setBwWeight('');
+                  }
+                }}
+                disabled={!bwWeight.trim() || isNaN(parseFloat(bwWeight))}
+                className="brutal-btn brutal-btn-accent px-3 py-2 text-xs font-display tracking-wider uppercase">
+                OK
+              </button>
+            </div>
+
+            {bwEntries.length >= 2 && (
+              <div className="mb-3" style={{ width: '100%', height: 60 }}>
+                <ResponsiveContainer>
+                  <LineChart data={[...bwEntries].reverse().slice(-7)}>
+                    <Line type="monotone" dataKey="weight" stroke="var(--color-accent)"
+                      strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            {bwEntries.length > 0 ? (
+              <div className="space-y-1 max-h-32 overflow-y-auto">
+                {bwEntries.slice(0, 5).map(e => (
+                  <div key={e.id} className="flex items-center justify-between py-1 px-2
+                    bg-[var(--color-concrete)] rounded-sm">
+                    <span className="text-xs text-text-dim font-mono">
+                      {new Date(e.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-text font-bold font-mono">{e.weight} kg</span>
+                      <button onClick={() => bwDelete(e.id)}
+                        className="text-text-muted hover:text-danger transition-colors">
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[10px] text-text-muted font-mono text-center py-2">Keine Einträge</p>
+            )}
+          </>
+        )}
+      </div>
 
       {/* WORKOUT HEATMAP */}
       <div className="brutal-card-sm p-3 mt-5 mb-5 animate-slide-up stagger-3">
