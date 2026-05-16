@@ -40,7 +40,7 @@ function App() {
       <main className="flex-1 overflow-y-auto pb-16">
         <div key={tab} className="animate-fade-in">
           {tab === 'home' && <HomeView workouts={workouts} onStartTraining={handleStartTraining} />}
-          {tab === 'today' && <TodayView onSave={addWorkout} />}
+          {tab === 'today' && <TodayView onSave={addWorkout} workouts={workouts} />}
           {tab === 'history' && <HistoryView workouts={workouts} onDelete={deleteWorkout} />}
           {tab === 'progress' && <ProgressView workouts={workouts} />}
         </div>
