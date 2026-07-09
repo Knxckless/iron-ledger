@@ -1,4 +1,4 @@
-const CACHE = 'gym-tracker-v1';
+const CACHE = 'iron-ledger-v2';
 const ASSETS = [
   '/',
   '/index.html',

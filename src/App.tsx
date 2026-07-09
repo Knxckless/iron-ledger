@@ -1,26 +1,28 @@
 import { useState, useCallback } from 'react';
-import { useWorkouts } from './hooks/useWorkouts';
+import { useLedger } from './hooks/useLedger';
 import { HomeView } from './views/HomeView';
 import { TodayView } from './views/TodayView';
+import { LibraryView } from './views/LibraryView';
 import { HistoryView } from './views/HistoryView';
 import { ProgressView } from './views/ProgressView';
-import { Home, Dumbbell, Clock, TrendingUp } from 'lucide-react';
+import { Home, Dumbbell, BookOpen, Clock, TrendingUp } from 'lucide-react';
 
-type Tab = 'home' | 'today' | 'history' | 'progress';
+type Tab = 'home' | 'today' | 'library' | 'history' | 'progress';
 
 const TABS: { key: Tab; icon: typeof Home; label: string }[] = [
   { key: 'home', icon: Home, label: 'Start' },
   { key: 'today', icon: Dumbbell, label: 'Training' },
+  { key: 'library', icon: BookOpen, label: 'Übungen' },
   { key: 'history', icon: Clock, label: 'Verlauf' },
   { key: 'progress', icon: TrendingUp, label: 'Charts' },
 ];
 
 function App() {
   const [tab, setTab] = useState<Tab>('home');
-  const { workouts, ready, addWorkout, deleteWorkout } = useWorkouts();
+  const ledger = useLedger();
   const handleStartTraining = useCallback(() => setTab('today'), []);
 
-  if (!ready) {
+  if (!ledger.ready) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-6 noise-bg" style={{ backgroundColor: 'var(--color-bg)' }}>
         <div className="w-20 h-20 brutal-card flex items-center justify-center animate-slam-in"
@@ -37,12 +39,13 @@ function App() {
 
   return (
     <div className="h-full flex flex-col max-w-lg mx-auto noise-bg" style={{ backgroundColor: 'var(--color-bg)' }}>
-      <main className="flex-1 overflow-y-auto pb-16">
+      <main className="flex-1 overflow-y-auto pb-20">
         <div key={tab} className="animate-fade-in">
-          {tab === 'home' && <HomeView workouts={workouts} onStartTraining={handleStartTraining} />}
-          {tab === 'today' && <TodayView onSave={addWorkout} workouts={workouts} />}
-          {tab === 'history' && <HistoryView workouts={workouts} onDelete={deleteWorkout} />}
-          {tab === 'progress' && <ProgressView workouts={workouts} />}
+          {tab === 'home' && <HomeView ledger={ledger} onStartTraining={handleStartTraining} />}
+          {tab === 'today' && <TodayView ledger={ledger} />}
+          {tab === 'library' && <LibraryView ledger={ledger} />}
+          {tab === 'history' && <HistoryView ledger={ledger} />}
+          {tab === 'progress' && <ProgressView ledger={ledger} />}
         </div>
       </main>
 
@@ -59,11 +62,11 @@ function App() {
               <button
                 key={key}
                 onClick={() => setTab(key)}
-                className={`flex-1 flex flex-col items-center gap-0.5 py-2.5 transition-all duration-150 ${
+                className={`flex-1 flex flex-col items-center gap-0.5 py-2.5 min-h-[52px] transition-all duration-150 ${
                   active ? 'text-accent' : 'text-text-dim'
                 }`}
-                style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: '0.65rem', letterSpacing: '0.06em' }}
-              >
+                style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: '0.62rem', letterSpacing: '0.06em' }}
+                aria-label={label}>
                 <Icon className="w-5 h-5" />
                 <span>{label}</span>
                 {active && (
