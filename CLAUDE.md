@@ -24,46 +24,91 @@ npx serve dist       # Serve production build (for phone testing)
 ```
 src/
   main.tsx                              # Entry, SW registration
-  App.tsx                               # Shell: 4-tab nav (Start|Training|Verlauf|Charts)
+  App.tsx                               # Shell: 5-tab nav (Start|Training|Übungen|Verlauf|Charts)
   index.css                             # Brutalist design system, fonts, animations
   data/
-    seedData.ts                         # 228 parsed CSV entries + types + exercise defaults
+    seedData.ts                         # 228 parsed CSV entries (v1 types + seed array)
+    model.ts                            # v2 data model: ExerciseDef, WorkoutTemplate, WorkoutEntry
+    muscles.ts                          # 16-muscle enum, German labels, categories, role weights
+    exerciseLibrary.ts                  # Default exercise defs with primary/secondary muscles
+  lib/
+    storage.ts                          # LocalStorage keys, v1→v2 migration, JSON export/import
+    stats.ts                            # e1RM (Epley), volume, muscle stats, balance, PRs, trends
   hooks/
-    useWorkouts.ts                      # LocalStorage CRUD for workouts
-    useExerciseTemplates.ts             # Custom exercise lists per type (localStorage)
+    useLedger.ts                        # Central hook: all stores + CRUD (workouts, exercises,
+                                        #   templates, body metrics), rename cascade
   components/
-    BodyMap.tsx                         # SVG muscle zone heatmap
+    BodyHeatmap.tsx                     # Front/back SVG muscle heatmap (volume intensity)
   views/
-    HomeView.tsx                        # Dashboard: stats, heatmap, tier list, timeline, mascots
-    TodayView.tsx                       # Log workout: type selector, exercise inputs, custom exercises
-    HistoryView.tsx                     # Past entries: filterable, sortable, expandable, delete
-    ProgressView.tsx                    # Charts: combined weight+reps, time filter, brush zoom, PB line
+    HomeView.tsx                        # Dashboard: stats, muscle heatmap + balance, body metrics,
+                                        #   12-week grid, tier list, backup export/import
+    TodayView.tsx                       # Log workout: template picker, countdown rest timer,
+                                        #   duplicate last, PR celebration
+    LibraryView.tsx                     # Exercise library (muscle editor) + template builder
+    HistoryView.tsx                     # Past entries: label filters, sortable, expandable, delete
+    ProgressView.tsx                    # Charts: metric switcher (Max/e1RM/Vol/Reps), trendline,
+                                        #   exercise compare, PR cards, weekly tonnage
 public/
     manifest.json                       # PWA manifest
-    sw.js                               # Service Worker
+    sw.js                               # Service Worker (cache 'iron-ledger-v2')
     favicon.svg                         # App icon
 scripts/
     parse-csvs.js                       # One-shot CSV → seedData.ts parser
 ```
 
-## Data Model
+## Data Model (v2)
 
 ```ts
-WorkoutEntry {
-  id: string            // UUID
-  date: string          // "YYYY-MM-DD"
-  type: "pull" | "push" | "leg"
-  exercises: {
-    name: string
-    sets: { weight: number, reps: number, notes?: string }[]
-  }[]
+MuscleId = 'chest' | 'upper_back' | 'lats' | 'lower_back' | 'traps'
+  | 'front_delts' | 'side_delts' | 'rear_delts' | 'biceps' | 'triceps'
+  | 'forearms' | 'quads' | 'hamstrings' | 'glutes' | 'calves' | 'abs'
+
+ExerciseDef {
+  id: string
+  name: string                  // unique; linkage key to workouts/templates
+  equipment: 'barbell'|'dumbbell'|'machine'|'cable'|'bodyweight'
+  muscles: { muscle: MuscleId, role: 'primary'|'secondary' }[]
+  builtin?: boolean             // default exercises: editable, not deletable
 }
+
+WorkoutTemplate {
+  id: string
+  name: string                  // e.g. "Upper A"
+  color: string
+  exerciseNames: string[]       // ordered
+  preset?: 'pull'|'push'|'leg'  // legacy presets, not deletable
+}
+
+WorkoutEntry {
+  id: string
+  date: string                  // "YYYY-MM-DD"
+  type: 'pull'|'push'|'leg'|'custom'
+  label?: string                // denormalized display name
+  templateId?: string
+  exercises: { name: string, sets: { weight, reps, notes? }[] }[]
+}
+
+MetricEntry { id, date, metric: 'weight'|'waist'|'chest'|'arm'|'thigh', value }
 ```
 
-- **Storage key**: `gym-tracker-workouts` (all entries as JSON array)
-- **Templates key**: `gym-tracker-templates` (custom exercise lists per type)
-- On first visit, 228 CSV entries are seeded into localStorage
-- New workouts get `crypto.randomUUID()` IDs
+### Storage keys & migration
+
+- `gym-tracker-workouts` — workout entries (v1 key reused; migration adds `label`)
+- `iron-ledger-exercises` — exercise library
+- `iron-ledger-templates` — workout templates (presets seeded from old `gym-tracker-templates`)
+- `iron-ledger-metrics` — body metrics (migrated from `gym-tracker-bodyweight`)
+- `iron-ledger-version` — schema version marker (`'2'`)
+
+`lib/storage.ts:loadAll()` runs the idempotent v1→v2 migration on startup. Exercise names
+found in history/templates but missing from the library get defs with empty muscle lists
+(flagged in the UI for mapping). First visit seeds 228 CSV entries.
+
+### Muscle tracking semantics
+
+Per set: primary muscles count ×1.0, secondary ×0.5 (`ROLE_WEIGHT`). Muscle stats
+(weighted sets/volume, sessions) are computed on the fly from workouts × library defs
+(`lib/stats.ts:computeMuscleStats`). Balance analysis derives push/pull ratio and
+neglected/underworked muscle warnings.
 
 ## Design System
 
@@ -75,43 +120,48 @@ WorkoutEntry {
 - **Buttons**: `brutal-btn` — hard shadow, translate on active, uppercase
 - **Inputs**: `brutal-input` — dark background, mono font, hard border
 - **Chips**: `brutal-chip` — toggle-style filter/tab buttons
+- **Labels**: `section-label` — small uppercase Bebas section headers
 - **Background**: CSS fractal noise texture overlay (`.noise-bg`)
 - **Animations**: fadeIn, slideUp, slamIn (scale+bounce), pulseBorder, staggered children
 
 ## Key Features
 
-### Start Page (HomeView)
-- 4 quick stats (total workouts, this week, streak, last type)
-- **Body Map**: SVG muscle zones colored by this week's trained types
-- **12-Week Heatmap**: GitHub-style contribution grid
-- **Tier List**: Last 5 workouts ranked S/A/B/C by volume
-- **Timeline**: Diamond-node roadmap of last 6 sessions
-- **Animated Mascot**: CSS keyframe animation switching per last workout type (push/pull/leg)
-- CTA button with pulse glow
+### Start (HomeView)
+- 4 quick stats (total, this week, week-streak, last workout label)
+- **Muscle heatmap**: front/back body SVG, intensity by weighted volume, time filter
+  (Woche/4 Wochen/3 Monate), tap muscle for detail
+- **Balance analysis**: push/pull/legs/core volume bars, ratio + neglected-muscle warnings
+- **Body metrics**: weight/waist/chest/arm/thigh, per-metric chart + delta
+- 12-week activity grid, tier list (S/A/B/C by volume)
+- **Backup**: JSON export (download) / import (file picker) via settings icon
 
 ### Training (TodayView)
-- Pull/Push/Leg type switcher with color-coded brutalist chips
-- Fixed exercise templates per type (customizable)
-- Set rows: weight (kg), reps, notes — mono-font brutalist inputs
-- Add/remove sets and exercises
-- Custom exercises persisted to localStorage
-- Save with slam animation + success feedback
+- Template picker (presets + custom, color-coded)
+- Session muscle preview chips (primary/secondary from library)
+- Countdown rest timer (60/90/120/180s), vibration on finish, progress bar
+- "Letztes Training laden" duplicates the last session of that template
+- New sets inherit previous set's weight
+- Adding an unknown exercise auto-creates a library entry
+- **PR celebration overlay** on save (max weight / e1RM / reps vs. history)
 
-### History (HistoryView)
-- Filter by type (All/Pull/Push/Leg)
-- **Sort toggle**: newest-first / oldest-first
-- Expandable cards with full set details
-- Delete workout
-- Color-coded left border per type
+### Übungen (LibraryView)
+- Exercise CRUD: name, equipment, muscle picker (tap cycles primär → sekundär → aus)
+- Builtin exercises editable but not deletable; rename cascades to templates
+- Warning banner for exercises without muscle mapping
+- Template builder: name, color, ordered exercise list (reorder/remove)
+
+### Verlauf (HistoryView)
+- Filter chips derived from actual workout labels, newest/oldest sort
+- Expandable cards with sets + notes, session tonnage, delete with confirm
 
 ### Charts (ProgressView)
-- Exercise + type selector
-- Time filter chips (1M/3M/6M/1Y/ALL)
-- **Combined chart**: weight (orange solid, left axis) + reps (green dashed, right axis)
-- PB reference line
-- Recharts Brush for zoom/pan
-- **Custom tooltip**: shows all sets with notes in warning-yellow
-- Click data point → detail card with full set breakdown
+- Exercise selector (sorted by frequency) + compare mode (second exercise overlay)
+- Metric switcher: Max kg / e1RM (Epley) / Volumen / Reps
+- Linear trendline, PB reference line, progressive-overload badge
+  (last 3 vs. previous 3 sessions e1RM)
+- PR cards (max weight / best e1RM / max reps with dates)
+- Weekly tonnage bar chart across all workouts
+- Brush zoom/pan, detailed tooltip with per-set notes
 
 ### PWA
 - `manifest.json` with standalone display, portrait orientation
@@ -130,10 +180,8 @@ Parser handles: German decimals (67,5→67.5), inline notes, equipment variation
 
 ## Future Ideas
 
-- Exercise-specific notes in chart tooltips already working
-- "Top Lifts" section could become a proper PR tracker
-- Could add rest timer between sets
-- Could add workout plan/template sharing
-- Could add body weight tracking
-- Could add photo progress
-- Animation: the mascots could have more keyframe states (resting, working, celebrating)
+- Rest timer auto-start after entering a set
+- Workout plan sharing (export single template as JSON)
+- Photo progress tracking
+- More mascot keyframe states (resting, working, celebrating)
+- Light theme via `prefers-color-scheme`
