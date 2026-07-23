@@ -172,7 +172,8 @@ function TemplateEditor({ tpl, exercises, onSave, onCancel }: {
     });
   };
 
-  const valid = name.trim().length > 0 && selected.length > 0;
+  // Leeres Workout ist erlaubt — Übungen kommen beim Training dazu und bleiben erhalten
+  const valid = name.trim().length > 0;
 
   return (
     <div className="brutal-card-inset p-3 mt-2 space-y-3 animate-slide-up">

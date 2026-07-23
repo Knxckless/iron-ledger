@@ -56,11 +56,11 @@ function migrateWorkouts(): WorkoutEntry[] {
   if (!workouts) {
     workouts = seedWorkouts.map((w, i) => ({ ...w, id: `seed-${i}` })) as WorkoutEntry[];
   }
-  // label für alte Einträge ergänzen
-  const migrated = workouts.map(w => ({
-    ...w,
-    label: w.label || PRESET_LABELS[w.type] || 'Workout',
-  }));
+  // label für alte Einträge ergänzen + neueste zuerst normalisieren
+  // (Seed-Daten liegen aufsteigend vor; App-Logik erwartet workouts[0] = neuestes)
+  const migrated = workouts
+    .map(w => ({ ...w, label: w.label || PRESET_LABELS[w.type] || 'Workout' }))
+    .sort((a, b) => b.date.localeCompare(a.date));
   writeJSON(KEYS.workouts, migrated);
   return migrated;
 }

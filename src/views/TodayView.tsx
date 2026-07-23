@@ -23,6 +23,11 @@ function emptySets(): ExerciseEntry['sets'] {
   return [{ weight: 0, reps: 0, notes: '' }];
 }
 
+// Gehört ein Workout-Eintrag zu diesem Template? (custom via id, Preset via typ)
+function belongsTo(w: WorkoutEntry, tpl: WorkoutTemplate): boolean {
+  return w.templateId === tpl.id || (!!tpl.preset && w.type === tpl.preset);
+}
+
 // ===== Pausentimer (Countdown) =====
 
 function RestTimer() {
@@ -173,11 +178,20 @@ export function TodayView({ ledger }: Props) {
   const [newExerciseName, setNewExerciseName] = useState('');
   const [expandedRefs, setExpandedRefs] = useState<Set<string>>(new Set());
 
+  // Standard-Belegung = Übungen der letzten Session dieses Workouts (leere Sätze).
+  // Erst wenn es noch keine Session gibt, greift die Template-Liste aus dem Builder.
   const loadTemplate = useCallback((tpl: WorkoutTemplate | undefined) => {
-    setSession((tpl?.exerciseNames ?? []).map(name => ({ name, sets: emptySets() })));
+    let names: string[] = [];
+    if (tpl) {
+      const sessions = workouts
+        .filter(w => belongsTo(w, tpl))
+        .sort((a, b) => b.date.localeCompare(a.date));
+      names = sessions.length ? sessions[0].exercises.map(e => e.name) : tpl.exerciseNames;
+    }
+    setSession(names.map(name => ({ name, sets: emptySets() })));
     setSaved(false);
     setShowAddExercise(false);
-  }, []);
+  }, [workouts]);
 
   // Erste Initialisierung, sobald Templates geladen sind
   useEffect(() => {
@@ -238,13 +252,25 @@ export function TodayView({ ledger }: Props) {
     return map;
   }, [session, workouts]);
 
-  // Letztes Training dieses Templates als Vorlage laden
-  const lastOfTemplate = useMemo(() => {
-    if (!template) return null;
-    return workouts.find(w =>
-      w.templateId === template.id || (template.preset && w.type === template.preset)
-    ) ?? null;
+  // Alle bisherigen Sessions dieses Workouts, neueste zuerst
+  const templateSessions = useMemo(() => {
+    if (!template) return [];
+    return workouts
+      .filter(w => belongsTo(w, template))
+      .sort((a, b) => b.date.localeCompare(a.date));
   }, [workouts, template]);
+
+  const lastOfTemplate = templateSessions[0] ?? null;
+
+  // Workout-eigene Übungs-Bib: alles, was je in diesem Workout gemacht wurde
+  // (nach Häufigkeit sortiert) — dient als Schnellauswahl beim Hinzufügen.
+  const workoutPool = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const w of templateSessions) {
+      for (const ex of w.exercises) counts.set(ex.name, (counts.get(ex.name) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([n]) => n);
+  }, [templateSessions]);
 
   // Vorschau der letzten Session dieses Templates: Übungen, Reihenfolge, Satzzahl
   const [showPreview, setShowPreview] = useState(true);
@@ -302,23 +328,29 @@ export function TodayView({ ledger }: Props) {
     setSession(prev => prev.filter((_, i) => i !== exIdx));
   };
 
-  const handleAddExercise = (name: string) => {
+  const handleAddExercise = (name: string, keepOpen = false) => {
     const trimmed = name.trim();
     if (!trimmed) return;
     if (!exercisesByName.has(trimmed)) {
       // Neue Übung landet automatisch in der Bibliothek (Muskeln später zuordnen)
       addExercise({ name: trimmed, equipment: 'machine', muscles: [] });
     }
-    setSession(prev => [...prev, { name: trimmed, sets: emptySets() }]);
+    setSession(prev => prev.some(s => s.name === trimmed) ? prev : [...prev, { name: trimmed, sets: emptySets() }]);
     setNewExerciseName('');
-    setShowAddExercise(false);
+    if (!keepOpen) setShowAddExercise(false);
   };
+
+  // Schnellauswahl aus diesem Workout (noch nicht in der Session)
+  const poolToAdd = useMemo(
+    () => workoutPool.filter(n => !session.some(s => s.name === n)),
+    [workoutPool, session]
+  );
 
   const availableToAdd = useMemo(
     () => libraryExercises
-      .filter(e => !session.some(s => s.name === e.name))
+      .filter(e => !session.some(s => s.name === e.name) && !workoutPool.includes(e.name))
       .sort((a, b) => a.name.localeCompare(b.name, 'de')),
-    [libraryExercises, session]
+    [libraryExercises, session, workoutPool]
   );
 
   const handleSave = () => {
@@ -555,11 +587,26 @@ export function TodayView({ ledger }: Props) {
       </div>
 
       {showAddExercise ? (
-        <div className="brutal-card-sm p-3 mt-3 animate-slide-up space-y-2">
+        <div className="brutal-card-sm p-3 mt-3 animate-slide-up space-y-2.5">
+          {/* Schnellauswahl aus diesem Workout */}
+          {poolToAdd.length > 0 && (
+            <div>
+              <span className="section-label mb-1">Aus diesem Workout</span>
+              <div className="flex flex-wrap gap-1.5">
+                {poolToAdd.map(name => (
+                  <button key={name} onClick={() => handleAddExercise(name, true)}
+                    className="brutal-chip px-2.5 py-1.5 text-[11px] gap-1"
+                    style={{ backgroundColor: accentColor, color: '#000', borderColor: '#000' }}>
+                    <Plus className="w-3 h-3" /> {name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {availableToAdd.length > 0 && (
             <div className="relative">
-              <select defaultValue=""
-                onChange={e => e.target.value && handleAddExercise(e.target.value)}
+              <select value="" key={session.length}
+                onChange={e => e.target.value && handleAddExercise(e.target.value, true)}
                 className="w-full appearance-none brutal-input px-3 py-2.5 text-sm font-mono cursor-pointer">
                 <option value="" disabled>Aus Bibliothek wählen…</option>
                 {availableToAdd.map(ex => (
