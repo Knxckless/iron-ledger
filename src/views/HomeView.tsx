@@ -1,9 +1,9 @@
 // Dashboard: Stats, Muskel-Heatmap + Balance, Körpermetriken, Aktivitäts-Grid,
-// Tier List, Backup (Export/Import).
+// Backup (Export/Import).
 
 import { useMemo, useState, useRef } from 'react';
 import {
-  Flame, Calendar, ArrowRight, Zap, Trophy, Crown, Medal, Scale, Trash2,
+  Flame, Calendar, ArrowRight, Zap, Trophy, Scale, Trash2,
   ChevronDown, ChevronUp, Settings, Download, Upload, AlertTriangle,
   Utensils, Plus, Check, X,
 } from 'lucide-react';
@@ -12,7 +12,7 @@ import {
 } from 'recharts';
 import { BodyHeatmap } from '../components/BodyHeatmap';
 import { RoutineSettings } from '../components/RoutineSettings';
-import { workoutLabel, workoutColor, DIET_PHASE_INFO } from '../data/model';
+import { workoutLabel, DIET_PHASE_INFO } from '../data/model';
 import type { DietPhaseType } from '../data/model';
 import { CATEGORY_LABELS, CATEGORY_COLORS, MUSCLE_BY_ID } from '../data/muscles';
 import type { MuscleCategory } from '../data/muscles';
@@ -29,10 +29,6 @@ interface Props {
   onStartTraining: () => void;
 }
 
-function formatDay(dateStr: string) {
-  return new Date(dateStr).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
-}
-
 function isoDate(d: Date) {
   return d.toISOString().split('T')[0];
 }
@@ -44,7 +40,7 @@ const MUSCLE_RANGES = [
 ];
 
 export function HomeView({ ledger, onStartTraining }: Props) {
-  const { workouts, templates, exercisesByName, metrics, addMetric, deleteMetric, reload,
+  const { workouts, exercisesByName, metrics, addMetric, deleteMetric, reload,
     dietPhases, addDietPhase, deleteDietPhase } = ledger;
 
   const [selectedWeek, setSelectedWeek] = useState<number | null>(null);
@@ -132,29 +128,6 @@ export function HomeView({ ledger, onStartTraining }: Props) {
     return weeks;
   }, [workouts]);
 
-  // Tier List (letzte 5 nach Volumen)
-  const tierList = useMemo(() => {
-    const recent = workouts.slice(0, 5);
-    if (recent.length === 0) return [];
-    const scored = recent.map(w => ({
-      ...w,
-      maxWeight: w.exercises.reduce((mx, e) => Math.max(mx, ...e.sets.map(s => s.weight)), 0),
-      totalSets: w.exercises.reduce((s, e) => s + e.sets.length, 0),
-      volume: w.exercises.reduce((v, e) => v + e.sets.reduce((sv, s) => sv + s.weight * s.reps, 0), 0),
-    }));
-    const maxVol = Math.max(...scored.map(s => s.volume), 1);
-    const tiers = [
-      { tier: 'S', icon: Crown, color: '#ffd600', min: 0.8 },
-      { tier: 'A', icon: Medal, color: '#c0c0c0', min: 0.6 },
-      { tier: 'B', icon: Medal, color: '#cd7f32', min: 0.4 },
-      { tier: 'C', icon: Medal, color: '#666', min: 0 },
-    ];
-    return scored.map(s => {
-      const score = s.volume / maxVol;
-      const assigned = tiers.find(t => score >= t.min) || tiers[tiers.length - 1];
-      return { ...s, ...assigned };
-    });
-  }, [workouts]);
 
   // Neueste zuerst — unabhängig von der Speicherreihenfolge (Import kann abweichen)
   const metricEntries = useMemo(
@@ -703,52 +676,6 @@ export function HomeView({ ledger, onStartTraining }: Props) {
           <span>So</span><span>Di</span><span>Do</span><span>Sa</span>
         </div>
       </div>
-
-      {/* TIER LIST */}
-      {tierList.length > 0 && (
-        <div className="brutal-card-sm p-3 mb-5 animate-slide-up stagger-5">
-          <div className="flex items-center gap-2 mb-3">
-            <Crown className="w-4 h-4 text-warning" />
-            <h3 className="text-xs font-bold text-text font-display tracking-wider uppercase">Tier List</h3>
-            <span className="text-[10px] text-text-muted font-mono">Letzte {tierList.length} Trainings</span>
-          </div>
-          <div className="space-y-2">
-            {tierList.map((item, i) => {
-              const Icon = item.icon;
-              return (
-                <div key={item.id} className="brutal-card-inset p-2.5 animate-slide-up flex items-center gap-3"
-                  style={{
-                    animationDelay: `${0.2 + i * 0.05}s`,
-                    borderLeft: `4px solid ${item.color}`,
-                    boxShadow: item.tier === 'S' ? '0 0 12px rgba(255,214,0,0.15)' : 'none',
-                  }}>
-                  <div className="flex items-center gap-1.5 min-w-[36px]">
-                    <Icon className="w-4 h-4" style={{ color: item.color }} />
-                    <span className="text-sm font-bold font-display tracking-wider" style={{ color: item.color }}>
-                      {item.tier}
-                    </span>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-text font-display tracking-wider">
-                        {workoutLabel(item)}
-                      </span>
-                      <span className="text-[10px] text-text-muted font-mono">{formatDay(item.date)}</span>
-                    </div>
-                    <div className="flex gap-3 text-[10px] text-text-dim font-mono mt-0.5">
-                      <span>{item.exercises.length} Üb.</span>
-                      <span>{item.totalSets} Sätze</span>
-                      <span className="text-accent font-medium">{item.maxWeight}kg max</span>
-                      <span className="text-text-muted">{Math.round(item.volume).toLocaleString('de-DE')}kg</span>
-                    </div>
-                  </div>
-                  <span className="w-2 h-8 flex-shrink-0" style={{ backgroundColor: workoutColor(item, templates) }} />
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       {/* CTA */}
       <button onClick={onStartTraining}
