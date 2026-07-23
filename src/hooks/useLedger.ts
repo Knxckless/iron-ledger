@@ -2,7 +2,7 @@
 // Wird einmal in App.tsx instanziiert und per Props weitergereicht.
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import type { WorkoutEntry, ExerciseDef, WorkoutTemplate } from '../data/model';
+import type { WorkoutEntry, ExerciseDef, WorkoutTemplate, DietPhase } from '../data/model';
 import type { MetricEntry, MetricId } from '../lib/storage';
 import { loadAll, writeJSON, KEYS } from '../lib/storage';
 
@@ -11,6 +11,7 @@ export function useLedger() {
   const [exercises, setExercises] = useState<ExerciseDef[]>([]);
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
   const [metrics, setMetrics] = useState<MetricEntry[]>([]);
+  const [dietPhases, setDietPhases] = useState<DietPhase[]>([]);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -19,6 +20,7 @@ export function useLedger() {
     setExercises(data.exercises);
     setTemplates(data.templates);
     setMetrics(data.metrics);
+    setDietPhases(data.dietPhases);
     setReady(true);
   }, []);
 
@@ -28,6 +30,7 @@ export function useLedger() {
     setExercises(data.exercises);
     setTemplates(data.templates);
     setMetrics(data.metrics);
+    setDietPhases(data.dietPhases);
   }, []);
 
   // ===== Workouts =====
@@ -153,6 +156,36 @@ export function useLedger() {
     });
   }, []);
 
+  // ===== Diätphasen =====
+
+  const addDietPhase = useCallback((phase: Omit<DietPhase, 'id'>): DietPhase => {
+    const created: DietPhase = { ...phase, id: crypto.randomUUID() };
+    setDietPhases(prev => {
+      const updated = [...prev, created].sort((a, b) => b.startDate.localeCompare(a.startDate));
+      writeJSON(KEYS.dietPhases, updated);
+      return updated;
+    });
+    return created;
+  }, []);
+
+  const updateDietPhase = useCallback((id: string, patch: Partial<Omit<DietPhase, 'id'>>) => {
+    setDietPhases(prev => {
+      const updated = prev
+        .map(p => (p.id === id ? { ...p, ...patch } : p))
+        .sort((a, b) => b.startDate.localeCompare(a.startDate));
+      writeJSON(KEYS.dietPhases, updated);
+      return updated;
+    });
+  }, []);
+
+  const deleteDietPhase = useCallback((id: string) => {
+    setDietPhases(prev => {
+      const updated = prev.filter(p => p.id !== id);
+      writeJSON(KEYS.dietPhases, updated);
+      return updated;
+    });
+  }, []);
+
   // ===== Abgeleitete Lookups =====
 
   const exercisesByName = useMemo(() => {
@@ -167,6 +200,7 @@ export function useLedger() {
     exercises, exercisesByName, addExercise, updateExercise, deleteExercise,
     templates, addTemplate, updateTemplate, deleteTemplate,
     metrics, addMetric, deleteMetric,
+    dietPhases, addDietPhase, updateDietPhase, deleteDietPhase,
   };
 }
 

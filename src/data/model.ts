@@ -71,3 +71,22 @@ export function workoutColor(w: WorkoutEntry, templates?: WorkoutTemplate[]): st
   const tpl = templates?.find(t => t.id === w.templateId);
   return tpl?.color || '#ff6b00';
 }
+
+// ===== Diätphasen (Gewichts-Tracker) =====
+
+export type DietPhaseType = 'cut' | 'bulk' | 'maintain';
+
+export interface DietPhase {
+  id: string;
+  type: DietPhaseType;
+  startDate: string;        // "YYYY-MM-DD"
+  endDate?: string;         // leer = laufend
+  targetWeight?: number;    // optionales Zielgewicht in kg
+  note?: string;
+}
+
+export const DIET_PHASE_INFO: Record<DietPhaseType, { label: string; color: string; goal: string }> = {
+  cut:      { label: 'Diät',       color: '#448aff', goal: 'abnehmen' },
+  bulk:     { label: 'Aufbau',     color: '#ff6b00', goal: 'zunehmen' },
+  maintain: { label: 'Erhaltung',  color: '#9e9e9e', goal: 'halten' },
+};

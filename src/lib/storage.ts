@@ -2,7 +2,7 @@
 // v1-Keys (gym-tracker-*) bleiben erhalten bzw. werden weitergenutzt,
 // damit bestehende Daten (228 Seed-Einträge + eigene) nicht verloren gehen.
 
-import type { WorkoutEntry, ExerciseDef, WorkoutTemplate } from '../data/model';
+import type { WorkoutEntry, ExerciseDef, WorkoutTemplate, DietPhase } from '../data/model';
 import { PRESET_COLORS, PRESET_LABELS } from '../data/model';
 import { DEFAULT_EXERCISES } from '../data/exerciseLibrary';
 import { seedWorkouts, EXERCISES_BY_TYPE } from '../data/seedData';
@@ -15,6 +15,7 @@ export const KEYS = {
   exercises: 'iron-ledger-exercises',
   templates: 'iron-ledger-templates',
   metrics: 'iron-ledger-metrics',
+  dietPhases: 'iron-ledger-diet-phases',
 } as const;
 
 export function readJSON<T>(key: string): T | null {
@@ -115,11 +116,17 @@ function migrateMetrics(): MetricEntry[] {
   return entries;
 }
 
+// Diätphasen: neu in v2.1, existiert bei Altnutzern noch nicht → leeres Array
+function migrateDietPhases(): DietPhase[] {
+  return readJSON<DietPhase[]>(KEYS.dietPhases) ?? [];
+}
+
 export interface LedgerData {
   workouts: WorkoutEntry[];
   exercises: ExerciseDef[];
   templates: WorkoutTemplate[];
   metrics: MetricEntry[];
+  dietPhases: DietPhase[];
 }
 
 export function loadAll(): LedgerData {
@@ -127,8 +134,9 @@ export function loadAll(): LedgerData {
   const exercises = migrateExercises(workouts);
   const templates = migrateTemplates();
   const metrics = migrateMetrics();
+  const dietPhases = migrateDietPhases();
   localStorage.setItem(KEYS.version, '2');
-  return { workouts, exercises, templates, metrics };
+  return { workouts, exercises, templates, metrics, dietPhases };
 }
 
 // ===== Backup: Export / Import =====
@@ -142,6 +150,7 @@ export function exportBackup(): string {
     exercises: readJSON(KEYS.exercises) ?? [],
     templates: readJSON(KEYS.templates) ?? [],
     metrics: readJSON(KEYS.metrics) ?? [],
+    dietPhases: readJSON(KEYS.dietPhases) ?? [],
   }, null, 2);
 }
 
@@ -155,6 +164,7 @@ export function importBackup(json: string): { ok: boolean; error?: string } {
     if (Array.isArray(data.exercises)) writeJSON(KEYS.exercises, data.exercises);
     if (Array.isArray(data.templates)) writeJSON(KEYS.templates, data.templates);
     if (Array.isArray(data.metrics)) writeJSON(KEYS.metrics, data.metrics);
+    if (Array.isArray(data.dietPhases)) writeJSON(KEYS.dietPhases, data.dietPhases);
     localStorage.setItem(KEYS.version, '2');
     return { ok: true };
   } catch {

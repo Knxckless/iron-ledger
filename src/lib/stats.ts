@@ -1,6 +1,6 @@
 // Analytik-Kern: 1RM, Volumen, Muskel-Tracking, PRs, Trends
 
-import type { WorkoutEntry, ExerciseDef, SetEntry } from '../data/model';
+import type { WorkoutEntry, ExerciseDef, SetEntry, DietPhase } from '../data/model';
 import type { MuscleId, MuscleCategory } from '../data/muscles';
 import { MUSCLES, MUSCLE_BY_ID, ROLE_WEIGHT } from '../data/muscles';
 
@@ -321,4 +321,58 @@ export function weeklySetsPerMuscle(stats: MuscleStatsMap, rangeDays: number): W
       perWeek <= 0 ? 'none' : perWeek >= WEEKLY_SET_TARGET ? 'ok' : 'low';
     return { muscle: m.id, perWeek, status };
   });
+}
+
+// ===== Diätphasen-Fortschritt =====
+
+export interface WeightPoint { date: string; value: number; }
+
+export interface DietPhaseProgress {
+  active: boolean;
+  startWeight: number | null;
+  currentWeight: number | null;
+  delta: number;                 // aktuell − Start (kg)
+  days: number;                  // Start bis heute/Ende
+  ratePerWeek: number;           // kg/Woche
+  target: number | null;
+  remaining: number | null;      // Ziel − aktuell (kg, vorzeichenbehaftet)
+  onTrack: boolean | null;       // Richtung passt zum Phasenziel
+}
+
+function daysBetween(a: string, b: string): number {
+  return Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
+}
+
+// Fortschritt einer Phase aus den Gewichtseinträgen im Zeitraum.
+// weightPoints muss aufsteigend nach Datum sortiert sein.
+export function dietPhaseProgress(
+  phase: DietPhase,
+  weightPoints: WeightPoint[],
+  today: string,
+): DietPhaseProgress {
+  const active = phase.startDate <= today && (!phase.endDate || phase.endDate >= today);
+  const endRef = phase.endDate && phase.endDate < today ? phase.endDate : today;
+
+  const inRange = weightPoints.filter(p =>
+    p.date >= phase.startDate && p.date <= (phase.endDate ?? today)
+  );
+  const startWeight = inRange.length ? inRange[0].value : null;
+  const currentWeight = inRange.length ? inRange[inRange.length - 1].value : null;
+  const delta = startWeight !== null && currentWeight !== null ? round1(currentWeight - startWeight) : 0;
+
+  const days = Math.max(daysBetween(phase.startDate, endRef), 0);
+  const weeks = Math.max(days / 7, 1 / 7);
+  const ratePerWeek = round1(delta / weeks);
+
+  const target = phase.targetWeight ?? null;
+  const remaining = target !== null && currentWeight !== null ? round1(target - currentWeight) : null;
+
+  let onTrack: boolean | null = null;
+  if (startWeight !== null && currentWeight !== null) {
+    if (phase.type === 'cut') onTrack = delta < 0;
+    else if (phase.type === 'bulk') onTrack = delta > 0;
+    else onTrack = Math.abs(ratePerWeek) <= 0.25;
+  }
+
+  return { active, startWeight, currentWeight, delta, days, ratePerWeek, target, remaining, onTrack };
 }
