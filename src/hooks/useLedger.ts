@@ -2,7 +2,7 @@
 // Wird einmal in App.tsx instanziiert und per Props weitergereicht.
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import type { WorkoutEntry, ExerciseDef, WorkoutTemplate, DietPhase } from '../data/model';
+import type { WorkoutEntry, ExerciseDef, WorkoutTemplate, DietPhase, Routine, Settings } from '../data/model';
 import type { MetricEntry, MetricId } from '../lib/storage';
 import { loadAll, writeJSON, KEYS } from '../lib/storage';
 
@@ -12,6 +12,8 @@ export function useLedger() {
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
   const [metrics, setMetrics] = useState<MetricEntry[]>([]);
   const [dietPhases, setDietPhases] = useState<DietPhase[]>([]);
+  const [routines, setRoutines] = useState<Routine[]>([]);
+  const [settings, setSettings] = useState<Settings>({});
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -21,6 +23,8 @@ export function useLedger() {
     setTemplates(data.templates);
     setMetrics(data.metrics);
     setDietPhases(data.dietPhases);
+    setRoutines(data.routines);
+    setSettings(data.settings);
     setReady(true);
   }, []);
 
@@ -31,6 +35,8 @@ export function useLedger() {
     setTemplates(data.templates);
     setMetrics(data.metrics);
     setDietPhases(data.dietPhases);
+    setRoutines(data.routines);
+    setSettings(data.settings);
   }, []);
 
   // ===== Workouts =====
@@ -128,6 +134,12 @@ export function useLedger() {
       writeJSON(KEYS.templates, updated);
       return updated;
     });
+    // aus allen Routinen entfernen
+    setRoutines(prev => {
+      const next = prev.map(r => ({ ...r, templateIds: r.templateIds.filter(tid => tid !== id) }));
+      writeJSON(KEYS.routines, next);
+      return next;
+    });
   }, []);
 
   // ===== Körpermetriken =====
@@ -186,6 +198,49 @@ export function useLedger() {
     });
   }, []);
 
+  // ===== Routinen + aktive Routine =====
+
+  const addRoutine = useCallback((routine: Omit<Routine, 'id'>): Routine => {
+    const created: Routine = { ...routine, id: crypto.randomUUID() };
+    setRoutines(prev => {
+      const updated = [...prev, created];
+      writeJSON(KEYS.routines, updated);
+      return updated;
+    });
+    return created;
+  }, []);
+
+  const updateRoutine = useCallback((id: string, patch: Partial<Omit<Routine, 'id'>>) => {
+    setRoutines(prev => {
+      const updated = prev.map(r => (r.id === id ? { ...r, ...patch } : r));
+      writeJSON(KEYS.routines, updated);
+      return updated;
+    });
+  }, []);
+
+  const deleteRoutine = useCallback((id: string) => {
+    setRoutines(prev => {
+      const updated = prev.filter(r => r.id !== id);
+      writeJSON(KEYS.routines, updated);
+      return updated;
+    });
+    // war es die aktive Routine? → Auswahl zurücksetzen
+    setSettings(prev => {
+      if (prev.activeRoutineId !== id) return prev;
+      const next = { ...prev, activeRoutineId: undefined };
+      writeJSON(KEYS.settings, next);
+      return next;
+    });
+  }, []);
+
+  const setActiveRoutineId = useCallback((id: string | undefined) => {
+    setSettings(prev => {
+      const next = { ...prev, activeRoutineId: id };
+      writeJSON(KEYS.settings, next);
+      return next;
+    });
+  }, []);
+
   // ===== Abgeleitete Lookups =====
 
   const exercisesByName = useMemo(() => {
@@ -201,6 +256,8 @@ export function useLedger() {
     templates, addTemplate, updateTemplate, deleteTemplate,
     metrics, addMetric, deleteMetric,
     dietPhases, addDietPhase, updateDietPhase, deleteDietPhase,
+    routines, addRoutine, updateRoutine, deleteRoutine,
+    settings, setActiveRoutineId,
   };
 }
 

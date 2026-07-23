@@ -90,3 +90,18 @@ export const DIET_PHASE_INFO: Record<DietPhaseType, { label: string; color: stri
   bulk:     { label: 'Aufbau',     color: '#ff6b00', goal: 'zunehmen' },
   maintain: { label: 'Erhaltung',  color: '#9e9e9e', goal: 'halten' },
 };
+
+// ===== Routine =====
+// Eine Routine bündelt Workout-Templates in Reihenfolge (z. B. PPL = Push/Pull/Leg).
+// Die aktive Routine filtert die Workout-Auswahl auf der Training-Seite.
+
+export interface Routine {
+  id: string;
+  name: string;
+  templateIds: string[];   // geordnete Template-IDs
+}
+
+// App-weite Einstellungen (klein gehalten, erweiterbar)
+export interface Settings {
+  activeRoutineId?: string;
+}

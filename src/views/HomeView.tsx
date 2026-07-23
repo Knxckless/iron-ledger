@@ -11,6 +11,7 @@ import {
   LineChart, Line, YAxis, XAxis, ResponsiveContainer, Tooltip, ReferenceArea, ReferenceLine, Label,
 } from 'recharts';
 import { BodyHeatmap } from '../components/BodyHeatmap';
+import { RoutineSettings } from '../components/RoutineSettings';
 import { workoutLabel, workoutColor, DIET_PHASE_INFO } from '../data/model';
 import type { DietPhaseType } from '../data/model';
 import { CATEGORY_LABELS, CATEGORY_COLORS, MUSCLE_BY_ID } from '../data/muscles';
@@ -266,6 +267,9 @@ export function HomeView({ ledger, onStartTraining }: Props) {
         </div>
         <p className="text-text-dim text-xs uppercase tracking-widest font-mono">{today}</p>
       </div>
+
+      {/* EINSTELLUNGEN */}
+      {showSettings && <RoutineSettings ledger={ledger} />}
 
       {/* BACKUP-PANEL */}
       {showSettings && (

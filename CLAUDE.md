@@ -136,10 +136,13 @@ neglected/underworked muscle warnings.
 - **Balance analysis**: push/pull/legs/core volume bars, ratio + neglected-muscle warnings
 - **Body metrics**: weight/waist/chest/arm/thigh, per-metric chart + delta
 - 12-week activity grid, tier list (S/A/B/C by volume)
-- **Backup**: JSON export (download) / import (file picker) via settings icon
+- **Settings** (gear icon): **Routines** — bundle workouts into an ordered routine
+  (e.g. PPL); the active routine filters the Training workout picker. Plus JSON
+  **backup** export (download) / import (file picker)
 
 ### Training (TodayView)
-- Template picker (presets + custom, color-coded)
+- Template picker (presets + custom, color-coded); when a routine is active, only its
+  workouts are shown (in routine order), with a "Routine: <name>" label
 - **Last-session preview** per template: exercises in order with set counts + top weight
 - **Per-exercise target**: inline "Zuletzt" line + suggested weight×reps (double progression
   via `suggestNextTarget`) with trend arrow; target values fill the set input placeholders

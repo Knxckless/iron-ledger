@@ -4,7 +4,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Save, Plus, X, Dumbbell, ChevronDown, ChevronUp, Timer,
-  Copy, Trophy, Pause, Play, RotateCcw, ClipboardList, TrendingUp, TrendingDown, Minus, Target,
+  Copy, Trophy, Pause, Play, RotateCcw, ClipboardList, TrendingUp, TrendingDown, Minus, Target, ListChecks,
 } from 'lucide-react';
 import type { WorkoutEntry, ExerciseEntry, WorkoutTemplate } from '../data/model';
 import { MUSCLE_BY_ID } from '../data/muscles';
@@ -164,11 +164,25 @@ function PRCelebration({ prs, onClose }: { prs: NewPR[]; onClose: () => void }) 
 // ===== Hauptview =====
 
 export function TodayView({ ledger }: Props) {
-  const { templates, exercises: libraryExercises, exercisesByName, workouts, addWorkout, addExercise } = ledger;
+  const { templates, exercises: libraryExercises, exercisesByName, workouts, addWorkout, addExercise,
+    routines, settings } = ledger;
 
-  const [templateId, setTemplateId] = useState<string>(templates[0]?.id ?? '');
+  // Aktive Routine: nur deren Workouts (in Routinen-Reihenfolge) zeigen.
+  // Ohne aktive Routine (oder wenn leer/verwaist) → alle Workouts.
+  const activeRoutine = routines.find(r => r.id === settings.activeRoutineId) ?? null;
+  const visibleTemplates = useMemo(() => {
+    if (!activeRoutine) return templates;
+    const inRoutine = activeRoutine.templateIds
+      .map(id => templates.find(t => t.id === id))
+      .filter((t): t is WorkoutTemplate => !!t);
+    return inRoutine.length ? inRoutine : templates;
+  }, [activeRoutine, templates]);
+
+  const [templateId, setTemplateId] = useState<string>(visibleTemplates[0]?.id ?? '');
   const template: WorkoutTemplate | undefined =
-    templates.find(t => t.id === templateId) ?? templates[0];
+    visibleTemplates.find(t => t.id === templateId)
+    ?? templates.find(t => t.id === templateId)
+    ?? visibleTemplates[0];
 
   const [session, setSession] = useState<ExerciseEntry[]>([]);
   const [initialized, setInitialized] = useState(false);
@@ -201,6 +215,15 @@ export function TodayView({ ledger }: Props) {
       setInitialized(true);
     }
   }, [initialized, template, loadTemplate]);
+
+  // Routinenwechsel: fällt das gewählte Workout aus der Auswahl, aufs erste springen
+  useEffect(() => {
+    if (initialized && visibleTemplates.length &&
+        !visibleTemplates.some(t => t.id === templateId)) {
+      setTemplateId(visibleTemplates[0].id);
+      loadTemplate(visibleTemplates[0]);
+    }
+  }, [visibleTemplates, initialized, templateId, loadTemplate]);
 
   const selectTemplate = (id: string) => {
     setTemplateId(id);
@@ -393,9 +416,19 @@ export function TodayView({ ledger }: Props) {
 
       <RestTimer />
 
-      {/* Workout-Auswahl (Templates) */}
+      {/* Aktive Routine (falls gesetzt) */}
+      {activeRoutine && (
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <ListChecks className="w-3 h-3 text-accent" />
+          <span className="text-[10px] text-text-dim font-mono uppercase tracking-wider">
+            Routine: <span className="text-text font-bold">{activeRoutine.name}</span>
+          </span>
+        </div>
+      )}
+
+      {/* Workout-Auswahl (nur Workouts der aktiven Routine, sonst alle) */}
       <div className="flex gap-2 mb-3 overflow-x-auto pb-1 -mx-1 px-1">
-        {templates.map(t => (
+        {visibleTemplates.map(t => (
           <button key={t.id} onClick={() => selectTemplate(t.id)}
             className="brutal-chip px-3.5 py-2.5 text-sm whitespace-nowrap flex-shrink-0"
             style={template?.id === t.id

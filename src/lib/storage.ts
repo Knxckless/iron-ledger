@@ -2,7 +2,7 @@
 // v1-Keys (gym-tracker-*) bleiben erhalten bzw. werden weitergenutzt,
 // damit bestehende Daten (228 Seed-Einträge + eigene) nicht verloren gehen.
 
-import type { WorkoutEntry, ExerciseDef, WorkoutTemplate, DietPhase } from '../data/model';
+import type { WorkoutEntry, ExerciseDef, WorkoutTemplate, DietPhase, Routine, Settings } from '../data/model';
 import { PRESET_COLORS, PRESET_LABELS } from '../data/model';
 import { DEFAULT_EXERCISES } from '../data/exerciseLibrary';
 import { seedWorkouts, EXERCISES_BY_TYPE } from '../data/seedData';
@@ -16,6 +16,8 @@ export const KEYS = {
   templates: 'iron-ledger-templates',
   metrics: 'iron-ledger-metrics',
   dietPhases: 'iron-ledger-diet-phases',
+  routines: 'iron-ledger-routines',
+  settings: 'iron-ledger-settings',
 } as const;
 
 export function readJSON<T>(key: string): T | null {
@@ -121,12 +123,22 @@ function migrateDietPhases(): DietPhase[] {
   return readJSON<DietPhase[]>(KEYS.dietPhases) ?? [];
 }
 
+// Routinen + Settings: neu, Fallback leer
+function migrateRoutines(): Routine[] {
+  return readJSON<Routine[]>(KEYS.routines) ?? [];
+}
+function migrateSettings(): Settings {
+  return readJSON<Settings>(KEYS.settings) ?? {};
+}
+
 export interface LedgerData {
   workouts: WorkoutEntry[];
   exercises: ExerciseDef[];
   templates: WorkoutTemplate[];
   metrics: MetricEntry[];
   dietPhases: DietPhase[];
+  routines: Routine[];
+  settings: Settings;
 }
 
 export function loadAll(): LedgerData {
@@ -135,8 +147,10 @@ export function loadAll(): LedgerData {
   const templates = migrateTemplates();
   const metrics = migrateMetrics();
   const dietPhases = migrateDietPhases();
+  const routines = migrateRoutines();
+  const settings = migrateSettings();
   localStorage.setItem(KEYS.version, '2');
-  return { workouts, exercises, templates, metrics, dietPhases };
+  return { workouts, exercises, templates, metrics, dietPhases, routines, settings };
 }
 
 // ===== Backup: Export / Import =====
@@ -151,6 +165,8 @@ export function exportBackup(): string {
     templates: readJSON(KEYS.templates) ?? [],
     metrics: readJSON(KEYS.metrics) ?? [],
     dietPhases: readJSON(KEYS.dietPhases) ?? [],
+    routines: readJSON(KEYS.routines) ?? [],
+    settings: readJSON(KEYS.settings) ?? {},
   }, null, 2);
 }
 
@@ -165,6 +181,8 @@ export function importBackup(json: string): { ok: boolean; error?: string } {
     if (Array.isArray(data.templates)) writeJSON(KEYS.templates, data.templates);
     if (Array.isArray(data.metrics)) writeJSON(KEYS.metrics, data.metrics);
     if (Array.isArray(data.dietPhases)) writeJSON(KEYS.dietPhases, data.dietPhases);
+    if (Array.isArray(data.routines)) writeJSON(KEYS.routines, data.routines);
+    if (data.settings && typeof data.settings === 'object') writeJSON(KEYS.settings, data.settings);
     localStorage.setItem(KEYS.version, '2');
     return { ok: true };
   } catch {
