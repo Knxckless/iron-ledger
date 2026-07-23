@@ -33,7 +33,8 @@ src/
     exerciseLibrary.ts                  # Default exercise defs with primary/secondary muscles
   lib/
     storage.ts                          # LocalStorage keys, v1→v2 migration, JSON export/import
-    stats.ts                            # e1RM (Epley), volume, muscle stats, balance, PRs, trends
+    stats.ts                            # e1RM (Epley), volume, muscle stats, balance, PRs, trends,
+                                        #   suggestNextTarget (double progression), weeklySetsPerMuscle
   hooks/
     useLedger.ts                        # Central hook: all stores + CRUD (workouts, exercises,
                                         #   templates, body metrics), rename cascade
@@ -130,6 +131,8 @@ neglected/underworked muscle warnings.
 - 4 quick stats (total, this week, week-streak, last workout label)
 - **Muscle heatmap**: front/back body SVG, intensity by weighted volume, time filter
   (Woche/4 Wochen/3 Monate), tap muscle for detail
+- **Ø sets/week per muscle**: weighted sets divided by range weeks, color-coded vs.
+  `WEEKLY_SET_TARGET` (≥10), plus a "hinkt hinterher" reminder listing muscles below target
 - **Balance analysis**: push/pull/legs/core volume bars, ratio + neglected-muscle warnings
 - **Body metrics**: weight/waist/chest/arm/thigh, per-metric chart + delta
 - 12-week activity grid, tier list (S/A/B/C by volume)
@@ -137,6 +140,9 @@ neglected/underworked muscle warnings.
 
 ### Training (TodayView)
 - Template picker (presets + custom, color-coded)
+- **Last-session preview** per template: exercises in order with set counts + top weight
+- **Per-exercise target**: inline "Zuletzt" line + suggested weight×reps (double progression
+  via `suggestNextTarget`) with trend arrow; target values fill the set input placeholders
 - Session muscle preview chips (primary/secondary from library)
 - Countdown rest timer (60/90/120/180s), vibration on finish, progress bar
 - "Letztes Training laden" duplicates the last session of that template

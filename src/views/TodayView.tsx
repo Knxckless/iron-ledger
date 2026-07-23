@@ -4,13 +4,13 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Save, Plus, X, Dumbbell, ChevronDown, ChevronUp, Timer,
-  Copy, Trophy, Pause, Play, RotateCcw,
+  Copy, Trophy, Pause, Play, RotateCcw, ClipboardList, TrendingUp, TrendingDown, Minus, Target,
 } from 'lucide-react';
 import type { WorkoutEntry, ExerciseEntry, WorkoutTemplate } from '../data/model';
 import { MUSCLE_BY_ID } from '../data/muscles';
 import type { MuscleId } from '../data/muscles';
-import { detectNewPRs, round1 } from '../lib/stats';
-import type { NewPR } from '../lib/stats';
+import { detectNewPRs, round1, suggestNextTarget } from '../lib/stats';
+import type { NewPR, TargetSuggestion } from '../lib/stats';
 import type { Ledger } from '../hooks/useLedger';
 
 interface Props {
@@ -225,6 +225,19 @@ export function TodayView({ ledger }: Props) {
     });
   };
 
+  // Ziel-Vorschlag pro Übung der Session, aus dem gesamten Verlauf abgeleitet
+  const targets = useMemo(() => {
+    const map = new Map<string, TargetSuggestion | null>();
+    for (const ex of session) {
+      if (map.has(ex.name)) continue;
+      const history = workouts
+        .filter(w => w.exercises.some(e => e.name === ex.name))
+        .map(w => ({ date: w.date, sets: w.exercises.find(e => e.name === ex.name)!.sets }));
+      map.set(ex.name, suggestNextTarget(history));
+    }
+    return map;
+  }, [session, workouts]);
+
   // Letztes Training dieses Templates als Vorlage laden
   const lastOfTemplate = useMemo(() => {
     if (!template) return null;
@@ -232,6 +245,17 @@ export function TodayView({ ledger }: Props) {
       w.templateId === template.id || (template.preset && w.type === template.preset)
     ) ?? null;
   }, [workouts, template]);
+
+  // Vorschau der letzten Session dieses Templates: Übungen, Reihenfolge, Satzzahl
+  const [showPreview, setShowPreview] = useState(true);
+  const templatePreview = useMemo(() => {
+    if (!lastOfTemplate) return null;
+    return lastOfTemplate.exercises.map(ex => {
+      const valid = ex.sets.filter(s => s.weight > 0 && s.reps > 0);
+      const top = valid.reduce((mx, s) => (s.weight > mx ? s.weight : mx), 0);
+      return { name: ex.name, setCount: valid.length, topWeight: top };
+    });
+  }, [lastOfTemplate]);
 
   const duplicateLast = () => {
     if (!lastOfTemplate) return;
@@ -369,6 +393,42 @@ export function TodayView({ ledger }: Props) {
         </div>
       )}
 
+      {/* Vorschau der letzten Session dieses Templates */}
+      {templatePreview && templatePreview.length > 0 && lastOfTemplate && (
+        <div className="brutal-card-sm mb-3 animate-fade-in" style={{ borderLeft: `4px solid ${accentColor}` }}>
+          <button onClick={() => setShowPreview(!showPreview)}
+            className="w-full flex items-center justify-between px-3 py-2.5 text-left">
+            <div className="flex items-center gap-2 min-w-0">
+              <ClipboardList className="w-4 h-4 flex-shrink-0" style={{ color: accentColor }} />
+              <span className="text-xs font-bold text-text font-display tracking-wider uppercase">
+                Letzte Session
+              </span>
+              <span className="text-[10px] text-text-muted font-mono">
+                {new Date(lastOfTemplate.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+                {' · '}{templatePreview.reduce((s, e) => s + e.setCount, 0)} Sätze
+              </span>
+            </div>
+            {showPreview ? <ChevronUp className="w-4 h-4 text-text-dim flex-shrink-0" />
+              : <ChevronDown className="w-4 h-4 text-text-dim flex-shrink-0" />}
+          </button>
+          {showPreview && (
+            <div className="px-3 pb-3 space-y-1">
+              {templatePreview.map((e, i) => (
+                <div key={`${e.name}-${i}`} className="flex items-center gap-2 text-[11px] font-mono">
+                  <span className="text-text-muted w-4 text-right">{i + 1}.</span>
+                  <span className="text-text-dim flex-1 truncate">{e.name}</span>
+                  <span className="px-1.5 py-0.5 border font-bold flex-shrink-0"
+                    style={{ backgroundColor: 'var(--color-concrete)', borderColor: '#3d3d3d', color: 'var(--color-text)' }}>
+                    {e.setCount}×
+                  </span>
+                  {e.topWeight > 0 && <span className="text-accent w-14 text-right">{e.topWeight}kg</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {lastOfTemplate && !hasData && (
         <button onClick={duplicateLast}
           className="w-full py-2.5 mb-3 brutal-card-sm text-text-dim flex items-center justify-center gap-2
@@ -379,7 +439,13 @@ export function TodayView({ ledger }: Props) {
       )}
 
       <div className="space-y-3">
-        {session.map((ex, exIdx) => (
+        {session.map((ex, exIdx) => {
+          const target = targets.get(ex.name) ?? null;
+          const TrendMark = target?.trend === 'up' ? TrendingUp
+            : target?.trend === 'down' ? TrendingDown : Minus;
+          const trendCol = target?.trend === 'up' ? 'var(--color-success)'
+            : target?.trend === 'down' ? 'var(--color-danger)' : 'var(--color-text-muted)';
+          return (
           <div key={`${ex.name}-${exIdx}`} className="brutal-card-sm p-3 animate-slide-up"
             style={{ borderLeft: `4px solid ${accentColor}` }}>
             <div className="flex items-center justify-between mb-2">
@@ -403,6 +469,22 @@ export function TodayView({ ledger }: Props) {
                 </button>
               </div>
             </div>
+
+            {/* Zuletzt + Zielvorschlag (aus Verlauf) */}
+            {target && (
+              <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mb-2 text-[10px] font-mono">
+                <span className="text-text-muted">
+                  Zuletzt: <span className="text-text-dim">{target.lastWeight}kg × {target.lastReps}</span>
+                  <span className="text-text-muted"> · {target.lastSetCount}S</span>
+                </span>
+                <span className="flex items-center gap-1 px-1.5 py-0.5 border"
+                  style={{ borderColor: accentColor, color: 'var(--color-text)' }}>
+                  <Target className="w-3 h-3" style={{ color: accentColor }} />
+                  Ziel {target.weight}kg × {target.reps}
+                  <TrendMark className="w-3 h-3" style={{ color: trendCol }} />
+                </span>
+              </div>
+            )}
 
             {expandedRefs.has(ex.name) && (
               <div className="mb-2 p-2 animate-slide-up" style={{ backgroundColor: 'var(--color-concrete)' }}>
@@ -437,12 +519,14 @@ export function TodayView({ ledger }: Props) {
               {ex.sets.map((set, setIdx) => (
                 <div key={setIdx} className="flex items-center gap-1.5">
                   <span className="text-xs text-text-muted w-4 text-right font-mono">{setIdx + 1}</span>
-                  <input type="number" inputMode="decimal" placeholder="0"
+                  <input type="number" inputMode="decimal"
+                    placeholder={target ? String(target.weight) : '0'}
                     value={set.weight || ''}
                     onChange={e => updateSet(exIdx, setIdx, 'weight', e.target.value ? parseFloat(e.target.value) : 0)}
                     className="brutal-input w-16 px-2 py-2.5 text-sm text-center font-mono" />
                   <span className="text-text-muted text-[10px] uppercase font-mono">kg</span>
-                  <input type="number" inputMode="numeric" placeholder="0"
+                  <input type="number" inputMode="numeric"
+                    placeholder={target ? String(target.reps) : '0'}
                     value={set.reps || ''}
                     onChange={e => updateSet(exIdx, setIdx, 'reps', e.target.value ? parseInt(e.target.value) : 0)}
                     className="brutal-input w-14 px-2 py-2.5 text-sm text-center font-mono" />
@@ -466,7 +550,8 @@ export function TodayView({ ledger }: Props) {
               <Plus className="w-3 h-3" /> Satz
             </button>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {showAddExercise ? (

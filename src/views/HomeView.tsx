@@ -9,9 +9,12 @@ import {
 import { LineChart, Line, YAxis, ResponsiveContainer, Tooltip } from 'recharts';
 import { BodyHeatmap } from '../components/BodyHeatmap';
 import { workoutLabel, workoutColor } from '../data/model';
-import { CATEGORY_LABELS, CATEGORY_COLORS } from '../data/muscles';
+import { CATEGORY_LABELS, CATEGORY_COLORS, MUSCLE_BY_ID } from '../data/muscles';
 import type { MuscleCategory } from '../data/muscles';
-import { computeMuscleStats, computeBalance, muscleLabel, round1 } from '../lib/stats';
+import {
+  computeMuscleStats, computeBalance, muscleLabel, round1,
+  weeklySetsPerMuscle, WEEKLY_SET_TARGET,
+} from '../lib/stats';
 import { exportBackup, importBackup, METRIC_INFO } from '../lib/storage';
 import type { MetricId } from '../lib/storage';
 import type { Ledger } from '../hooks/useLedger';
@@ -86,6 +89,16 @@ export function HomeView({ ledger, onStartTraining }: Props) {
   }, [workouts, exercisesByName, muscleRange]);
 
   const totalCategoryVolume = Object.values(balance.categoryVolume).reduce((a, b) => a + b, 0);
+
+  // Ø gewichtete Sätze pro Muskel pro Woche + was dem Wochenziel hinterherhinkt
+  const weeklyLoad = useMemo(
+    () => weeklySetsPerMuscle(muscleStats, muscleRange).sort((a, b) => b.perWeek - a.perWeek),
+    [muscleStats, muscleRange]
+  );
+  const lagging = useMemo(
+    () => weeklyLoad.filter(w => w.status === 'low').sort((a, b) => a.perWeek - b.perWeek),
+    [weeklyLoad]
+  );
 
   // 12-Wochen-Aktivitätsgrid
   const heatmap = useMemo(() => {
@@ -269,7 +282,39 @@ export function HomeView({ ledger, onStartTraining }: Props) {
           </div>
         )}
 
-        {/* Balance-Hinweise */}
+        {/* Ø Sätze pro Muskel pro Woche */}
+        {totalCategoryVolume > 0 && (
+          <div className="mt-4">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="section-label">Ø Sätze / Woche</span>
+              <span className="text-[9px] text-text-muted font-mono">Ziel ≥ {WEEKLY_SET_TARGET} · gewichtet</span>
+            </div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+              {weeklyLoad.map(w => {
+                const col = w.status === 'ok' ? 'var(--color-success)'
+                  : w.status === 'low' ? 'var(--color-warning)' : 'var(--color-text-muted)';
+                const frac = Math.min(w.perWeek / WEEKLY_SET_TARGET, 1);
+                return (
+                  <div key={w.muscle} className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-text-dim font-mono truncate flex-1"
+                      title={MUSCLE_BY_ID[w.muscle].label}>
+                      {MUSCLE_BY_ID[w.muscle].short}
+                    </span>
+                    <div className="w-10 h-1.5 border border-black flex-shrink-0"
+                      style={{ backgroundColor: 'var(--color-concrete)' }}>
+                      <div className="h-full" style={{ width: `${frac * 100}%`, backgroundColor: col }} />
+                    </div>
+                    <span className="text-[10px] font-mono font-bold w-7 text-right" style={{ color: col }}>
+                      {round1(w.perWeek)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Balance-Hinweise + Volumen-Ermahnung */}
         <div className="mt-3 space-y-1.5">
           {balance.pushPullRatio !== null && isFinite(balance.pushPullRatio) &&
             (balance.pushPullRatio > 1.5 || balance.pushPullRatio < 0.67) && (
@@ -289,11 +334,12 @@ export function HomeView({ ledger, onStartTraining }: Props) {
               </span>
             </div>
           )}
-          {balance.underworked.length > 0 && (
+          {lagging.length > 0 && (
             <div className="brutal-card-inset px-2.5 py-1.5 flex items-start gap-2">
               <AlertTriangle className="w-3.5 h-3.5 text-warning flex-shrink-0 mt-0.5" />
               <span className="text-[10px] text-text-dim font-mono">
-                Vernachlässigt: {balance.underworked.map(muscleLabel).join(', ')}
+                Hinkt hinterher (unter {WEEKLY_SET_TARGET}/Woche):{' '}
+                {lagging.slice(0, 6).map(w => `${MUSCLE_BY_ID[w.muscle].short} (${round1(w.perWeek)})`).join(', ')}
               </span>
             </div>
           )}

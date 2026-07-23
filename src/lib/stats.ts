@@ -221,3 +221,104 @@ export function linearTrend(values: number[]): number[] {
 export function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
+
+// ===== Ziel-Vorschlag (Double Progression) =====
+
+export interface SessionSets {
+  date: string;
+  sets: SetEntry[];
+}
+
+export interface TargetSuggestion {
+  weight: number;
+  reps: number;
+  basis: 'reps' | 'weight' | 'hold';  // Reps hoch / Gewicht hoch / halten
+  lastWeight: number;
+  lastReps: number;
+  lastSetCount: number;
+  trend: TrendDirection | null;
+}
+
+// Arbeitssatz einer Session = schwerster Satz; bei Gleichstand die meisten Reps
+function topSet(sets: SetEntry[]): { weight: number; reps: number } | null {
+  const valid = sets.filter(s => s.weight > 0 && s.reps > 0);
+  if (valid.length === 0) return null;
+  return valid.reduce((best, s) => {
+    if (s.weight > best.weight) return { weight: s.weight, reps: s.reps };
+    if (s.weight === best.weight && s.reps > best.reps) return { weight: s.weight, reps: s.reps };
+    return best;
+  }, { weight: 0, reps: 0 });
+}
+
+function loadIncrement(weight: number): number {
+  if (weight >= 100) return 5;
+  if (weight >= 20) return 2.5;
+  return 1.25;
+}
+
+// Erwartetes Gewicht/Wdh. fürs nächste Mal, abgeleitet aus dem eigenen Verlauf.
+// Prinzip Double Progression: erst Reps bis zum persönlichen Arbeits-Rep-Ziel
+// steigern, dann Gewicht erhöhen und Reps zurücksetzen. Bei Rückschritt: halten.
+export function suggestNextTarget(history: SessionSets[]): TargetSuggestion | null {
+  const sorted = [...history]
+    .filter(h => topSet(h.sets))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (sorted.length === 0) return null;
+
+  const last = sorted[sorted.length - 1];
+  const lastTop = topSet(last.sets)!;
+  const lastSetCount = last.sets.filter(s => s.weight > 0 && s.reps > 0).length;
+
+  // Arbeits-Rep-Ziel = gerundeter Schnitt der Top-Set-Reps der letzten 5 Sessions
+  const recent = sorted.slice(-5).map(h => topSet(h.sets)!.reps);
+  const repGoal = Math.max(1, Math.round(recent.reduce((a, b) => a + b, 0) / recent.length));
+
+  const trend = overloadTrend(sorted.map(h => ({ date: h.date, value: bestE1RM(h.sets) })));
+
+  let weight = lastTop.weight;
+  let reps = lastTop.reps;
+  let basis: TargetSuggestion['basis'];
+
+  if (trend?.direction === 'down') {
+    // Formkurve zeigt nach unten → gleiche Vorgabe konsolidieren
+    basis = 'hold';
+  } else if (lastTop.reps >= repGoal) {
+    // Rep-Ziel erreicht → Gewicht rauf, Reps aufs Ziel zurück
+    weight = round1(lastTop.weight + loadIncrement(lastTop.weight));
+    reps = repGoal;
+    basis = 'weight';
+  } else {
+    // Noch Luft nach oben bei den Reps → eine Wiederholung mehr
+    reps = lastTop.reps + 1;
+    basis = 'reps';
+  }
+
+  return {
+    weight, reps, basis,
+    lastWeight: lastTop.weight,
+    lastReps: lastTop.reps,
+    lastSetCount,
+    trend: trend?.direction ?? null,
+  };
+}
+
+// ===== Wöchentliche Satzbelastung pro Muskel =====
+
+// Evidenzbasierte Untergrenze fürs Muskelwachstum: ~10 gewichtete Sätze/Woche.
+export const WEEKLY_SET_TARGET = 10;
+
+export interface WeeklyMuscleLoad {
+  muscle: MuscleId;
+  perWeek: number;               // gewichtete Sätze pro Woche
+  status: 'ok' | 'low' | 'none';
+}
+
+export function weeklySetsPerMuscle(stats: MuscleStatsMap, rangeDays: number): WeeklyMuscleLoad[] {
+  const weeks = Math.max(rangeDays / 7, 1);
+  return MUSCLES.map(m => {
+    const perWeek = stats[m.id].weightedSets / weeks;
+    const status: WeeklyMuscleLoad['status'] =
+      perWeek <= 0 ? 'none' : perWeek >= WEEKLY_SET_TARGET ? 'ok' : 'low';
+    return { muscle: m.id, perWeek, status };
+  });
+}
