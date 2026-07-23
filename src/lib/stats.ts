@@ -235,19 +235,20 @@ export interface TargetSuggestion {
   basis: 'reps' | 'weight' | 'hold';  // Reps hoch / Gewicht hoch / halten
   lastWeight: number;
   lastReps: number;
+  lastRir?: number;                   // RIR des letzten Arbeitssatzes (falls erfasst)
   lastSetCount: number;
   trend: TrendDirection | null;
 }
 
 // Arbeitssatz einer Session = schwerster Satz; bei Gleichstand die meisten Reps
-function topSet(sets: SetEntry[]): { weight: number; reps: number } | null {
+function topSet(sets: SetEntry[]): { weight: number; reps: number; rir?: number } | null {
   const valid = sets.filter(s => s.weight > 0 && s.reps > 0);
   if (valid.length === 0) return null;
   return valid.reduce((best, s) => {
-    if (s.weight > best.weight) return { weight: s.weight, reps: s.reps };
-    if (s.weight === best.weight && s.reps > best.reps) return { weight: s.weight, reps: s.reps };
+    if (s.weight > best.weight) return { weight: s.weight, reps: s.reps, rir: s.rir };
+    if (s.weight === best.weight && s.reps > best.reps) return { weight: s.weight, reps: s.reps, rir: s.rir };
     return best;
-  }, { weight: 0, reps: 0 });
+  }, { weight: 0, reps: 0, rir: undefined as number | undefined });
 }
 
 function loadIncrement(weight: number): number {
@@ -297,6 +298,7 @@ export function suggestNextTarget(history: SessionSets[]): TargetSuggestion | nu
     weight, reps, basis,
     lastWeight: lastTop.weight,
     lastReps: lastTop.reps,
+    lastRir: lastTop.rir,
     lastSetCount,
     trend: trend?.direction ?? null,
   };

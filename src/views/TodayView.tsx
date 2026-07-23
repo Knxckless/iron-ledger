@@ -23,6 +23,17 @@ function emptySets(): ExerciseEntry['sets'] {
   return [{ weight: 0, reps: 0, notes: '' }];
 }
 
+// Kommazahlen zulassen: "7,5" und "7.5" → 7.5; leer/ungültig → 0
+function parseDec(v: string): number {
+  const n = parseFloat(v.replace(',', '.'));
+  return isNaN(n) ? 0 : n;
+}
+
+// Zahl mit deutschem Komma anzeigen (7.5 → "7,5")
+function fmtNum(n: number): string {
+  return String(n).replace('.', ',');
+}
+
 // Gehört ein Workout-Eintrag zu diesem Template? (custom via id, Preset via typ)
 function belongsTo(w: WorkoutEntry, tpl: WorkoutTemplate): boolean {
   return w.templateId === tpl.id || (!!tpl.preset && w.type === tpl.preset);
@@ -203,6 +214,7 @@ export function TodayView({ ledger }: Props) {
       names = sessions.length ? sessions[0].exercises.map(e => e.name) : tpl.exerciseNames;
     }
     setSession(names.map(name => ({ name, sets: emptySets() })));
+    setEdits({});
     setSaved(false);
     setShowAddExercise(false);
   }, [workouts]);
@@ -310,12 +322,12 @@ export function TodayView({ ledger }: Props) {
     if (!lastOfTemplate) return;
     setSession(lastOfTemplate.exercises.map(ex => ({
       name: ex.name,
-      sets: ex.sets.map(s => ({ weight: s.weight, reps: s.reps, notes: '' })),
+      sets: ex.sets.map(s => ({ weight: s.weight, reps: s.reps, rir: s.rir, notes: '' })),
     })));
     setSaved(false);
   };
 
-  const updateSet = (exIdx: number, setIdx: number, field: 'weight' | 'reps' | 'notes', value: string | number) => {
+  const updateSet = (exIdx: number, setIdx: number, field: 'weight' | 'reps' | 'notes' | 'rir', value: string | number | undefined) => {
     setSession(prev => {
       const updated = [...prev];
       const sets = [...updated[exIdx].sets];
@@ -323,6 +335,28 @@ export function TodayView({ ledger }: Props) {
       updated[exIdx] = { ...updated[exIdx], sets };
       return updated;
     });
+  };
+
+  // Tipp-Puffer für Zahlenfelder: hält den rohen String (z. B. "7,") während des
+  // Tippens, damit Kommazahlen nicht vorzeitig auf die geparste Zahl zurückspringen.
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const editKey = (exIdx: number, setIdx: number, field: string) => `${exIdx}-${setIdx}-${field}`;
+
+  const setNumField = (exIdx: number, setIdx: number, field: 'weight' | 'reps' | 'rir', raw: string) => {
+    setEdits(prev => ({ ...prev, [editKey(exIdx, setIdx, field)]: raw }));
+    const val = field === 'rir'
+      ? (raw.trim() === '' ? undefined : parseDec(raw))
+      : parseDec(raw);
+    updateSet(exIdx, setIdx, field, val);
+  };
+  const blurNumField = (exIdx: number, setIdx: number, field: string) => {
+    setEdits(prev => { const n = { ...prev }; delete n[editKey(exIdx, setIdx, field)]; return n; });
+  };
+  const numFieldValue = (exIdx: number, setIdx: number, field: 'weight' | 'reps' | 'rir', stored: number | undefined) => {
+    const k = editKey(exIdx, setIdx, field);
+    if (k in edits) return edits[k];
+    if (field === 'rir') return stored == null ? '' : fmtNum(stored);
+    return stored ? fmtNum(stored) : '';
   };
 
   const addSet = (exIdx: number) => {
@@ -539,7 +573,10 @@ export function TodayView({ ledger }: Props) {
             {target && (
               <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mb-2 text-[10px] font-mono">
                 <span className="text-text-muted">
-                  Zuletzt: <span className="text-text-dim">{target.lastWeight}kg × {target.lastReps}</span>
+                  Zuletzt: <span className="text-text-dim">{fmtNum(target.lastWeight)}kg × {fmtNum(target.lastReps)}</span>
+                  {target.lastRir != null && (
+                    <span className="text-warning"> · {fmtNum(target.lastRir)} RIR</span>
+                  )}
                   <span className="text-text-muted"> · {target.lastSetCount}S</span>
                 </span>
                 <span className="flex items-center gap-1 px-1.5 py-0.5 border"
@@ -568,7 +605,7 @@ export function TodayView({ ledger }: Props) {
                           {' — '}
                           {h.exercise.sets
                             .filter(s => s.weight > 0 && s.reps > 0)
-                            .map(s => `${s.weight}kg × ${s.reps}`)
+                            .map(s => `${fmtNum(s.weight)}kg × ${fmtNum(s.reps)}${s.rir != null ? ` · ${fmtNum(s.rir)} RIR` : ''}`)
                             .join(', ')}
                         </div>
                       ))}
@@ -584,17 +621,26 @@ export function TodayView({ ledger }: Props) {
               {ex.sets.map((set, setIdx) => (
                 <div key={setIdx} className="flex items-center gap-1.5">
                   <span className="text-xs text-text-muted w-4 text-right font-mono">{setIdx + 1}</span>
-                  <input type="number" inputMode="decimal"
-                    placeholder={target ? String(target.weight) : '0'}
-                    value={set.weight || ''}
-                    onChange={e => updateSet(exIdx, setIdx, 'weight', e.target.value ? parseFloat(e.target.value) : 0)}
+                  <input type="text" inputMode="decimal"
+                    placeholder={target ? fmtNum(target.weight) : '0'}
+                    value={numFieldValue(exIdx, setIdx, 'weight', set.weight)}
+                    onChange={e => setNumField(exIdx, setIdx, 'weight', e.target.value)}
+                    onBlur={() => blurNumField(exIdx, setIdx, 'weight')}
                     className="brutal-input w-16 px-2 py-2.5 text-sm text-center font-mono" />
                   <span className="text-text-muted text-[10px] uppercase font-mono">kg</span>
-                  <input type="number" inputMode="numeric"
-                    placeholder={target ? String(target.reps) : '0'}
-                    value={set.reps || ''}
-                    onChange={e => updateSet(exIdx, setIdx, 'reps', e.target.value ? parseInt(e.target.value) : 0)}
+                  <input type="text" inputMode="decimal"
+                    placeholder={target ? fmtNum(target.reps) : '0'}
+                    value={numFieldValue(exIdx, setIdx, 'reps', set.reps)}
+                    onChange={e => setNumField(exIdx, setIdx, 'reps', e.target.value)}
+                    onBlur={() => blurNumField(exIdx, setIdx, 'reps')}
                     className="brutal-input w-14 px-2 py-2.5 text-sm text-center font-mono" />
+                  <input type="text" inputMode="decimal" placeholder="RIR"
+                    value={numFieldValue(exIdx, setIdx, 'rir', set.rir)}
+                    onChange={e => setNumField(exIdx, setIdx, 'rir', e.target.value)}
+                    onBlur={() => blurNumField(exIdx, setIdx, 'rir')}
+                    className="brutal-input w-12 px-1.5 py-2.5 text-sm text-center font-mono"
+                    style={{ color: 'var(--color-warning)' }}
+                    title="Reps in Reserve (optional)" />
                   <input type="text" placeholder="Notiz"
                     value={set.notes || ''}
                     onChange={e => updateSet(exIdx, setIdx, 'notes', e.target.value)}
