@@ -15,6 +15,8 @@ export type MuscleId =
   | 'quads'
   | 'hamstrings'
   | 'glutes'
+  | 'adductors'
+  | 'abductors'
   | 'calves'
   | 'abs';
 
@@ -49,6 +51,8 @@ export const MUSCLES: MuscleInfo[] = [
   { id: 'quads', label: 'Quadrizeps', short: 'Quads', category: 'legs' },
   { id: 'hamstrings', label: 'Beinbeuger', short: 'Hamstrings', category: 'legs' },
   { id: 'glutes', label: 'Gluteus', short: 'Gluteus', category: 'legs' },
+  { id: 'adductors', label: 'Adduktoren', short: 'Adduktor', category: 'legs' },
+  { id: 'abductors', label: 'Abduktoren', short: 'Abduktor', category: 'legs' },
   { id: 'calves', label: 'Waden', short: 'Waden', category: 'legs' },
   { id: 'abs', label: 'Bauch', short: 'Bauch', category: 'core' },
   { id: 'lower_back', label: 'Unterer Rücken', short: 'U. Rücken', category: 'core' },
