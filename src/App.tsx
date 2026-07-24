@@ -42,8 +42,8 @@ function App() {
   }
 
   return (
-    <div className="h-full flex flex-col max-w-lg mx-auto noise-bg" style={{ backgroundColor: 'var(--color-bg)' }}>
-      <main className="flex-1 overflow-y-auto pb-20">
+    <div className="h-full flex flex-col max-w-lg mx-auto noise-bg overflow-x-hidden" style={{ backgroundColor: 'var(--color-bg)' }}>
+      <main className="flex-1 overflow-y-auto overflow-x-hidden pb-20">
         <div key={tab} className="animate-fade-in">
           {tab === 'home' && <HomeView ledger={ledger} onStartTraining={handleStartTraining} />}
           {tab === 'today' && <TodayView ledger={ledger} initialTemplateId={pendingTemplateId} />}

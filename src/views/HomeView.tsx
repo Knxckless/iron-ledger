@@ -156,7 +156,7 @@ export function HomeView({ ledger, onStartTraining }: Props) {
         const dateStr = isoDate(date);
         days.push({ date: dateStr, count: workouts.filter(wk => wk.date === dateStr).length });
       }
-      weeks.push({ label: `${weekStart.getDate()}.${weekStart.getMonth() + 1}.`, days });
+      weeks.push({ label: `${weekStart.getDate()}.${weekStart.getMonth() + 1}`, days });
     }
     return weeks;
   }, [workouts]);
@@ -410,7 +410,7 @@ export function HomeView({ ledger, onStartTraining }: Props) {
         {[
           { icon: Flame, value: stats.total, label: 'Total', color: 'var(--color-accent)' },
           { icon: Zap, value: stats.thisWeek, label: 'Woche', color: 'var(--color-warning)' },
-          { icon: Calendar, value: stats.streak, label: 'Wo-Streak', color: 'var(--color-success)' },
+          { icon: Calendar, value: stats.streak, label: 'Streak', color: 'var(--color-success)' },
           { icon: Trophy, value: stats.lastWorkout ? workoutLabel(stats.lastWorkout) : '--', label: 'Letztes', color: 'var(--color-accent)' },
         ].map((s, i) => (
           <div key={s.label} className="brutal-card-sm p-2 text-center animate-slide-up"
@@ -546,10 +546,10 @@ export function HomeView({ ledger, onStartTraining }: Props) {
 
         {bmExpanded && (
           <>
-            <div className="flex gap-1 mb-3 overflow-x-auto pb-1">
+            <div className="flex flex-wrap gap-1 mb-3">
               {(Object.keys(METRIC_INFO) as MetricId[]).map(id => (
                 <button key={id} onClick={() => setMetricId(id)}
-                  className={`brutal-chip px-2.5 py-1 text-[10px] whitespace-nowrap flex-shrink-0 ${metricId === id ? 'active' : ''}`}>
+                  className={`brutal-chip px-2.5 py-1 text-[10px] whitespace-nowrap ${metricId === id ? 'active' : ''}`}>
                   {METRIC_INFO[id].label}
                 </button>
               ))}
@@ -784,11 +784,11 @@ export function HomeView({ ledger, onStartTraining }: Props) {
             ))}
           </div>
         </div>
-        <div className="flex gap-1">
+        <div className="flex gap-1 overflow-hidden">
           {heatmap.map((week, wi) => (
-            <div key={wi} className="flex-1 flex flex-col gap-1"
+            <div key={wi} className="flex-1 min-w-0 flex flex-col gap-1"
               onMouseEnter={() => setSelectedWeek(wi)} onMouseLeave={() => setSelectedWeek(null)}>
-              <span className="text-[8px] text-text-muted text-center font-mono leading-none mb-0.5">{week.label}</span>
+              <span className="block truncate text-[8px] text-text-muted text-center font-mono leading-none mb-0.5">{week.label}</span>
               {week.days.map((day, di) => {
                 const isToday = day.date === isoDate(new Date());
                 return (
