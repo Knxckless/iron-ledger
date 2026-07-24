@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { WorkoutEntry, ExerciseDef, WorkoutTemplate, DietPhase, Routine, Settings } from '../data/model';
-import type { MetricEntry, MetricId } from '../lib/storage';
+import type { MetricEntry, MetricId, NutritionEntry } from '../lib/storage';
 import { loadAll, writeJSON, KEYS } from '../lib/storage';
 
 export function useLedger() {
@@ -14,6 +14,7 @@ export function useLedger() {
   const [dietPhases, setDietPhases] = useState<DietPhase[]>([]);
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [settings, setSettings] = useState<Settings>({});
+  const [nutrition, setNutrition] = useState<NutritionEntry[]>([]);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -25,6 +26,7 @@ export function useLedger() {
     setDietPhases(data.dietPhases);
     setRoutines(data.routines);
     setSettings(data.settings);
+    setNutrition(data.nutrition);
     setReady(true);
   }, []);
 
@@ -37,6 +39,7 @@ export function useLedger() {
     setDietPhases(data.dietPhases);
     setRoutines(data.routines);
     setSettings(data.settings);
+    setNutrition(data.nutrition);
   }, []);
 
   // ===== Workouts =====
@@ -241,6 +244,41 @@ export function useLedger() {
     });
   }, []);
 
+  // Generisches Settings-Update (Timer, Profil …)
+  const updateSettings = useCallback((patch: Partial<Settings>) => {
+    setSettings(prev => {
+      const next = { ...prev, ...patch };
+      writeJSON(KEYS.settings, next);
+      return next;
+    });
+  }, []);
+
+  // ===== Kalorien-/Protein-Log (ein Eintrag pro Tag) =====
+
+  const addNutrition = useCallback((date: string, kcal: number, protein?: number) => {
+    setNutrition(prev => {
+      const idx = prev.findIndex(e => e.date === date);
+      let updated: NutritionEntry[];
+      if (idx >= 0) {
+        updated = [...prev];
+        updated[idx] = { ...updated[idx], kcal, protein };
+      } else {
+        updated = [{ id: crypto.randomUUID(), date, kcal, protein }, ...prev];
+      }
+      updated.sort((a, b) => b.date.localeCompare(a.date));
+      writeJSON(KEYS.nutrition, updated);
+      return updated;
+    });
+  }, []);
+
+  const deleteNutrition = useCallback((id: string) => {
+    setNutrition(prev => {
+      const updated = prev.filter(e => e.id !== id);
+      writeJSON(KEYS.nutrition, updated);
+      return updated;
+    });
+  }, []);
+
   // ===== Abgeleitete Lookups =====
 
   const exercisesByName = useMemo(() => {
@@ -257,7 +295,8 @@ export function useLedger() {
     metrics, addMetric, deleteMetric,
     dietPhases, addDietPhase, updateDietPhase, deleteDietPhase,
     routines, addRoutine, updateRoutine, deleteRoutine,
-    settings, setActiveRoutineId,
+    settings, setActiveRoutineId, updateSettings,
+    nutrition, addNutrition, deleteNutrition,
   };
 }
 

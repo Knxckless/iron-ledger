@@ -18,6 +18,7 @@ export const KEYS = {
   dietPhases: 'iron-ledger-diet-phases',
   routines: 'iron-ledger-routines',
   settings: 'iron-ledger-settings',
+  nutrition: 'iron-ledger-nutrition',
 } as const;
 
 export function readJSON<T>(key: string): T | null {
@@ -42,6 +43,17 @@ export interface MetricEntry {
   metric: MetricId;
   value: number;
 }
+
+// Kalorien-/Protein-Log (ein Eintrag pro Tag)
+export interface NutritionEntry {
+  id: string;
+  date: string;
+  kcal: number;
+  protein?: number;
+}
+
+// Umrechnung Gewichtsänderung ↔ Energie (grobe Konvention ~7700 kcal je kg)
+export const KCAL_PER_KG = 7700;
 
 export const METRIC_INFO: Record<MetricId, { label: string; unit: string }> = {
   weight: { label: 'Gewicht', unit: 'kg' },
@@ -128,6 +140,9 @@ function migrateRoutines(): Routine[] {
 function migrateSettings(): Settings {
   return readJSON<Settings>(KEYS.settings) ?? {};
 }
+function migrateNutrition(): NutritionEntry[] {
+  return readJSON<NutritionEntry[]>(KEYS.nutrition) ?? [];
+}
 
 export interface LedgerData {
   workouts: WorkoutEntry[];
@@ -137,6 +152,7 @@ export interface LedgerData {
   dietPhases: DietPhase[];
   routines: Routine[];
   settings: Settings;
+  nutrition: NutritionEntry[];
 }
 
 export function loadAll(): LedgerData {
@@ -147,8 +163,9 @@ export function loadAll(): LedgerData {
   const dietPhases = migrateDietPhases();
   const routines = migrateRoutines();
   const settings = migrateSettings();
+  const nutrition = migrateNutrition();
   localStorage.setItem(KEYS.version, '2');
-  return { workouts, exercises, templates, metrics, dietPhases, routines, settings };
+  return { workouts, exercises, templates, metrics, dietPhases, routines, settings, nutrition };
 }
 
 // Werksreset: löscht alle App-Daten (inkl. Alt-Keys). Nach einem Reload wird
@@ -173,6 +190,7 @@ export function exportBackup(): string {
     dietPhases: readJSON(KEYS.dietPhases) ?? [],
     routines: readJSON(KEYS.routines) ?? [],
     settings: readJSON(KEYS.settings) ?? {},
+    nutrition: readJSON(KEYS.nutrition) ?? [],
   }, null, 2);
 }
 
@@ -189,6 +207,7 @@ export function importBackup(json: string): { ok: boolean; error?: string } {
     if (Array.isArray(data.dietPhases)) writeJSON(KEYS.dietPhases, data.dietPhases);
     if (Array.isArray(data.routines)) writeJSON(KEYS.routines, data.routines);
     if (data.settings && typeof data.settings === 'object') writeJSON(KEYS.settings, data.settings);
+    if (Array.isArray(data.nutrition)) writeJSON(KEYS.nutrition, data.nutrition);
     localStorage.setItem(KEYS.version, '2');
     return { ok: true };
   } catch {

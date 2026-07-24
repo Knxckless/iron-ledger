@@ -378,3 +378,127 @@ export function dietPhaseProgress(
 
   return { active, startWeight, currentWeight, delta, days, ratePerWeek, target, remaining, onTrack };
 }
+
+// ===== Gewichtstrend geglättet + Rate =====
+
+// Gleitender Mittelwert über die letzten `windowDays` Tage je Punkt.
+// weightPoints aufsteigend sortiert. Liefert eine geglättete Reihe.
+export function movingAverage(points: WeightPoint[], windowDays = 7): WeightPoint[] {
+  return points.map((p, i) => {
+    let sum = 0, n = 0;
+    for (let j = i; j >= 0; j--) {
+      if (daysBetween(points[j].date, p.date) > windowDays) break;
+      sum += points[j].value; n++;
+    }
+    return { date: p.date, value: round1(sum / n) };
+  });
+}
+
+// Trend-Rate in kg/Woche aus linearer Regression über die letzten `days`.
+export function weightTrendRate(points: WeightPoint[], days = 21): number | null {
+  if (points.length < 2) return null;
+  const last = points[points.length - 1].date;
+  const win = points.filter(p => daysBetween(p.date, last) <= days);
+  if (win.length < 2) return null;
+  const x0 = Date.parse(win[0].date);
+  const xs = win.map(p => (Date.parse(p.date) - x0) / 86400000);  // Tage
+  const ys = win.map(p => p.value);
+  const n = xs.length;
+  const sx = xs.reduce((a, b) => a + b, 0), sy = ys.reduce((a, b) => a + b, 0);
+  const sxy = xs.reduce((a, x, i) => a + x * ys[i], 0);
+  const sxx = xs.reduce((a, x) => a + x * x, 0);
+  const denom = n * sxx - sx * sx;
+  if (denom === 0) return null;
+  const slopePerDay = (n * sxy - sx * sy) / denom;
+  return round1(slopePerDay * 7);
+}
+
+// ===== Kalorienbedarf =====
+
+// Grundumsatz nach Mifflin-St Jeor × Aktivitätsfaktor → Erhaltungskalorien.
+export function mifflinTDEE(weightKg: number, heightCm: number, age: number,
+    sex: 'm' | 'f', activity: number): number {
+  const bmr = 10 * weightKg + 6.25 * heightCm - 5 * age + (sex === 'm' ? 5 : -161);
+  return Math.round(bmr * activity);
+}
+
+// Adaptiver TDEE aus tatsächlicher Kalorienzufuhr + Gewichtsänderung.
+// Energiebilanz: TDEE = Ø Zufuhr − (Gewichtsänderung × 7700 / Tage).
+// Braucht genug Daten (≥ 10 Tage Spanne, ≥ 7 Kalorien-Einträge, ≥ 3 Gewichte).
+export function adaptiveTDEE(
+  weightPoints: WeightPoint[],
+  intake: { date: string; kcal: number }[],
+  days = 21,
+): number | null {
+  if (weightPoints.length < 3 || intake.length < 7) return null;
+  const lastDate = weightPoints[weightPoints.length - 1].date;
+  const w = weightPoints.filter(p => daysBetween(p.date, lastDate) <= days);
+  const cal = intake.filter(p => daysBetween(p.date, lastDate) <= days && p.kcal > 0);
+  if (w.length < 3 || cal.length < 7) return null;
+  const spanDays = daysBetween(w[0].date, w[w.length - 1].date);
+  if (spanDays < 10) return null;
+
+  const avgIntake = cal.reduce((a, p) => a + p.kcal, 0) / cal.length;
+  const slopePerWeek = weightTrendRate(w, days);
+  if (slopePerWeek === null) return null;
+  const kgPerDay = slopePerWeek / 7;
+  const tdee = avgIntake - kgPerDay * 7700;
+  return Math.round(tdee);
+}
+
+// ===== Kraftstandards (grobe Einordnung via 1RM/Körpergewicht) =====
+
+export const STRENGTH_LEVELS = ['Untrainiert', 'Anfänger', 'Novize', 'Fortgeschritten', 'Stark', 'Elite'];
+
+// Schwellen als Vielfache des Körpergewichts fürs 1RM, je Übung + Geschlecht.
+const STRENGTH_STANDARDS: { match: RegExp; m: number[]; f: number[] }[] = [
+  { match: /bench|bank/i,               m: [0.5, 0.75, 1.25, 1.75, 2.0], f: [0.3, 0.5, 0.75, 1.0, 1.3] },
+  { match: /squat|kniebeuge|hex/i,      m: [0.75, 1.25, 1.75, 2.5, 3.0], f: [0.5, 0.9, 1.3, 1.8, 2.2] },
+  { match: /deadlift|kreuzheben|sldl/i, m: [1.0, 1.5, 2.0, 2.75, 3.25],  f: [0.6, 1.0, 1.5, 2.0, 2.5] },
+  { match: /ohp|overhead|shoulder|schulterdr|military/i, m: [0.35, 0.55, 0.8, 1.1, 1.4], f: [0.2, 0.35, 0.5, 0.75, 1.0] },
+  { match: /row|rudern/i,               m: [0.5, 0.75, 1.0, 1.4, 1.75],  f: [0.35, 0.55, 0.75, 1.0, 1.3] },
+];
+
+export interface StrengthLevel {
+  index: number;          // 0..5 (0 = untrainiert)
+  label: string;
+  ratio: number;          // aktuelles 1RM/KG
+  nextRatio: number | null;
+}
+
+export function strengthLevel(exerciseName: string, bestE1RM: number, bodyweightKg: number,
+    sex: 'm' | 'f'): StrengthLevel | null {
+  if (bestE1RM <= 0 || bodyweightKg <= 0) return null;
+  const std = STRENGTH_STANDARDS.find(s => s.match.test(exerciseName));
+  if (!std) return null;
+  const thresholds = sex === 'm' ? std.m : std.f;
+  const ratio = bestE1RM / bodyweightKg;
+  let idx = 0;
+  for (let i = 0; i < thresholds.length; i++) if (ratio >= thresholds[i]) idx = i + 1;
+  return {
+    index: idx,
+    label: STRENGTH_LEVELS[idx],
+    ratio: round1(ratio),
+    nextRatio: idx < thresholds.length ? thresholds[idx] : null,
+  };
+}
+
+// ===== Stagnations-Erkennung =====
+
+export interface StallInfo { stalling: boolean; sessionsFlat: number; }
+
+// Kein neuer e1RM-Höchstwert in den letzten `recent` Sessions → Stagnation.
+export function detectStall(e1rmByDate: { date: string; value: number }[], recent = 4): StallInfo {
+  const sorted = [...e1rmByDate].filter(p => p.value > 0).sort((a, b) => a.date.localeCompare(b.date));
+  if (sorted.length < recent + 2) return { stalling: false, sessionsFlat: 0 };
+  const peakBefore = Math.max(...sorted.slice(0, -recent).map(p => p.value));
+  const recentPeak = Math.max(...sorted.slice(-recent).map(p => p.value));
+  // wie viele Sessions am Ende ohne neuen Allzeit-Höchstwert
+  const overall = Math.max(...sorted.map(p => p.value));
+  let run = 0;
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    if (sorted[i].value >= overall - 0.01) break;
+    run++;
+  }
+  return { stalling: recentPeak <= peakBefore + 0.01, sessionsFlat: run };
+}

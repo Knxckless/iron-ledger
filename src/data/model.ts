@@ -104,4 +104,12 @@ export interface Routine {
 // App-weite Einstellungen (klein gehalten, erweiterbar)
 export interface Settings {
   activeRoutineId?: string;
+  // Pausentimer
+  timerAutoStart?: boolean;   // nach jedem Satz automatisch starten (Default an)
+  restDefaultSec?: number;    // Standard-Pausenlänge (Default 180 s)
+  // Profil für Kalorienbedarf-Schätzung (Mifflin-St Jeor)
+  heightCm?: number;
+  age?: number;
+  sex?: 'm' | 'f';
+  activity?: number;          // Aktivitätsfaktor (1.2 sitzend … 1.9 sehr aktiv)
 }

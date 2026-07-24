@@ -5,14 +5,16 @@ import { TodayView } from './views/TodayView';
 import { LibraryView } from './views/LibraryView';
 import { HistoryView } from './views/HistoryView';
 import { ProgressView } from './views/ProgressView';
-import { Home, Dumbbell, BookOpen, Clock, TrendingUp } from 'lucide-react';
+import { NutritionView } from './views/NutritionView';
+import { Home, Dumbbell, BookOpen, Clock, TrendingUp, Apple } from 'lucide-react';
 
-type Tab = 'home' | 'today' | 'library' | 'history' | 'progress';
+type Tab = 'home' | 'today' | 'library' | 'history' | 'progress' | 'nutrition';
 
 const TABS: { key: Tab; icon: typeof Home; label: string }[] = [
   { key: 'home', icon: Home, label: 'Start' },
   { key: 'today', icon: Dumbbell, label: 'Training' },
   { key: 'library', icon: BookOpen, label: 'Übungen' },
+  { key: 'nutrition', icon: Apple, label: 'Diät' },
   { key: 'history', icon: Clock, label: 'Verlauf' },
   { key: 'progress', icon: TrendingUp, label: 'Charts' },
 ];
@@ -48,6 +50,7 @@ function App() {
           {tab === 'home' && <HomeView ledger={ledger} onStartTraining={handleStartTraining} />}
           {tab === 'today' && <TodayView ledger={ledger} initialTemplateId={pendingTemplateId} />}
           {tab === 'library' && <LibraryView ledger={ledger} />}
+          {tab === 'nutrition' && <NutritionView ledger={ledger} />}
           {tab === 'history' && <HistoryView ledger={ledger} />}
           {tab === 'progress' && <ProgressView ledger={ledger} />}
         </div>

@@ -43,10 +43,15 @@ function belongsTo(w: WorkoutEntry, tpl: WorkoutTemplate): boolean {
 
 // ===== Pausentimer (Countdown) =====
 
-function RestTimer() {
+function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
+  defaultSec: number;
+  autoStart: boolean;
+  onToggleAutoStart: (v: boolean) => void;
+  startSignal: number;
+}) {
   const [visible, setVisible] = useState(false);
-  const [duration, setDuration] = useState(90);
-  const [remaining, setRemaining] = useState(90);
+  const [duration, setDuration] = useState(defaultSec);
+  const [remaining, setRemaining] = useState(defaultSec);
   const [running, setRunning] = useState(false);
   const endRef = useRef(0);
   const audioRef = useRef<AudioContext | null>(null);
@@ -146,6 +151,20 @@ function RestTimer() {
     setRunning(true);
   };
 
+  // Auto-Start: nach einem erfassten Satz die Pause automatisch starten.
+  // startSignal wird beim "Satz +" hochgezählt; ersten Wert überspringen.
+  const startRef = useRef(start);
+  startRef.current = start;
+  const seenSignal = useRef(startSignal);
+  useEffect(() => {
+    if (startSignal === seenSignal.current) return;
+    seenSignal.current = startSignal;
+    if (!autoStart) return;
+    setVisible(true);
+    startRef.current(duration);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startSignal]);
+
   const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
   const progress = duration > 0 ? remaining / duration : 0;
   const done = !running && remaining === 0;
@@ -200,6 +219,18 @@ function RestTimer() {
             className="brutal-chip px-2.5 py-1.5"><RotateCcw className="w-3.5 h-3.5" /></button>
         </div>
       </div>
+
+      {/* Auto-Start-Schalter: nach jedem "Satz +" die Pause automatisch starten */}
+      <button onClick={() => onToggleAutoStart(!autoStart)}
+        className="mt-2.5 flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider
+          text-text-muted hover:text-text transition-colors">
+        <span className="w-8 h-4 border border-black flex items-center px-0.5 transition-all"
+          style={{ backgroundColor: autoStart ? 'var(--color-accent)' : 'var(--color-concrete)',
+            justifyContent: autoStart ? 'flex-end' : 'flex-start' }}>
+          <span className="w-3 h-3 bg-black block" />
+        </span>
+        Auto-Start nach Satz {autoStart ? 'an' : 'aus'}
+      </button>
     </div>
   );
 }
@@ -249,7 +280,12 @@ function PRCelebration({ prs, onClose }: { prs: NewPR[]; onClose: () => void }) 
 
 export function TodayView({ ledger, initialTemplateId }: Props) {
   const { templates, exercises: libraryExercises, exercisesByName, workouts, addWorkout, addExercise,
-    routines, settings } = ledger;
+    routines, settings, updateSettings } = ledger;
+
+  // Pausentimer-Einstellungen (Default: 180 s, Auto-Start an)
+  const restDefault = settings.restDefaultSec ?? 180;
+  const autoStartRest = settings.timerAutoStart ?? true;
+  const [restSignal, setRestSignal] = useState(0);
 
   // Aktive Routine: nur deren Workouts (in Routinen-Reihenfolge) zeigen.
   // Ohne aktive Routine (oder wenn leer/verwaist) → alle Workouts.
@@ -482,6 +518,8 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
       };
       return updated;
     });
+    // Neuer Satz = vorheriger ist erledigt → Pause auto-starten
+    setRestSignal(s => s + 1);
   };
 
   const removeSet = (exIdx: number, setIdx: number) => {
@@ -571,7 +609,11 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
         <Dumbbell className="w-8 h-8 text-accent" />
       </div>
 
-      <RestTimer />
+      <RestTimer
+        defaultSec={restDefault}
+        autoStart={autoStartRest}
+        onToggleAutoStart={v => updateSettings({ timerAutoStart: v })}
+        startSignal={restSignal} />
 
       {/* Aktive Routine (falls gesetzt) */}
       {activeRoutine && (

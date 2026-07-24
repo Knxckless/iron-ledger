@@ -8,10 +8,12 @@ import {
 } from 'recharts';
 import {
   TrendingUp, TrendingDown, Minus, ChevronDown, Target, StickyNote, Trophy, X, GitCompareArrows,
+  Award, AlertTriangle,
 } from 'lucide-react';
 import type { WorkoutEntry } from '../data/model';
 import {
   epley1RM, exerciseVolume, computePRs, overloadTrend, linearTrend, round1, sessionTonnage,
+  strengthLevel, detectStall, STRENGTH_LEVELS,
 } from '../lib/stats';
 import type { Ledger } from '../hooks/useLedger';
 
@@ -135,7 +137,14 @@ function DetailTooltip({ active, payload, metric }: {
 }
 
 export function ProgressView({ ledger }: Props) {
-  const { workouts } = ledger;
+  const { workouts, metrics, settings } = ledger;
+
+  // Körpergewicht (letzter Eintrag) + Geschlecht → Kraftstandard-Einordnung
+  const bodyweight = useMemo(() => {
+    const w = metrics.filter(m => m.metric === 'weight').sort((a, b) => b.date.localeCompare(a.date));
+    return w.length ? w[0].value : null;
+  }, [metrics]);
+  const sex = settings.sex ?? null;
   const [selectedExercise, setSelectedExercise] = useState<string | null>(null);
   const [compareExercise, setCompareExercise] = useState<string | null>(null);
   const [showCompareSelect, setShowCompareSelect] = useState(false);
@@ -209,6 +218,19 @@ export function ProgressView({ ledger }: Props) {
     () => effectiveExercise ? computePRs(workouts, effectiveExercise) : null,
     [workouts, effectiveExercise]
   );
+
+  // Kraftstandard-Einordnung (nur für Grundübungen mit Standard-Match)
+  const strength = useMemo(() => {
+    if (!effectiveExercise || !prs?.bestE1RM || !bodyweight || !sex) return null;
+    return strengthLevel(effectiveExercise, prs.bestE1RM.value, bodyweight, sex);
+  }, [effectiveExercise, prs, bodyweight, sex]);
+
+  // Stagnations-Check über die gesamte e1RM-Historie
+  const stall = useMemo(() => {
+    if (!effectiveExercise) return null;
+    const all = sessionsFor(workouts, effectiveExercise, null);
+    return detectStall(all.map(p => ({ date: p.date, value: p.e1rm })));
+  }, [workouts, effectiveExercise]);
 
   // Wochen-Tonnage über alle Workouts
   const weeklyTonnage = useMemo(() => {
@@ -426,6 +448,53 @@ export function ProgressView({ ledger }: Props) {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Kraftstandard + Stagnation */}
+          {(strength || (stall && stall.stalling)) && (
+            <div className="grid gap-2 animate-slide-up"
+              style={{ gridTemplateColumns: strength && stall?.stalling ? '1fr 1fr' : '1fr' }}>
+              {strength && (
+                <div className="brutal-card-sm p-3" style={{ borderLeft: '4px solid var(--color-accent)' }}>
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <Award className="w-4 h-4 text-accent" />
+                    <span className="text-[10px] font-bold text-text-dim font-display tracking-wider uppercase">Kraftlevel</span>
+                  </div>
+                  <span className="block text-xl font-bold text-text font-display tracking-wide leading-none">
+                    {strength.label}
+                  </span>
+                  <span className="block text-[10px] text-text-muted font-mono mt-1">
+                    {strength.ratio}× Körpergewicht
+                    {strength.nextRatio != null && (
+                      <> · nächstes {STRENGTH_LEVELS[strength.index + 1]} ab {strength.nextRatio}×</>
+                    )}
+                  </span>
+                  {/* Level-Balken */}
+                  <div className="flex gap-0.5 mt-2">
+                    {STRENGTH_LEVELS.map((_, i) => (
+                      <div key={i} className="flex-1 h-1.5 border border-black"
+                        style={{ backgroundColor: i < strength.index ? 'var(--color-accent)' : 'var(--color-concrete)' }} />
+                    ))}
+                  </div>
+                </div>
+              )}
+              {stall && stall.stalling && (
+                <div className="brutal-card-sm p-3" style={{ borderLeft: '4px solid var(--color-warning)' }}>
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <AlertTriangle className="w-4 h-4 text-warning" />
+                    <span className="text-[10px] font-bold text-text-dim font-display tracking-wider uppercase">Stagnation</span>
+                  </div>
+                  <span className="block text-sm font-bold text-warning font-display tracking-wide leading-snug">
+                    {stall.sessionsFlat > 0
+                      ? `${stall.sessionsFlat} Sessions kein neuer Bestwert`
+                      : 'Kein neuer Bestwert zuletzt'}
+                  </span>
+                  <span className="block text-[10px] text-text-muted font-mono mt-1">
+                    Deload, Wdh.-Bereich ändern oder Technik prüfen.
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
