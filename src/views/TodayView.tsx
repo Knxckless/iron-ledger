@@ -276,17 +276,24 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
   const [newExerciseName, setNewExerciseName] = useState('');
   const [expandedRefs, setExpandedRefs] = useState<Set<string>>(new Set());
 
-  // Geführtes Training: nur die aktive Übung ist aufgeklappt, fertige werden abgehakt.
-  const [activeIdx, setActiveIdx] = useState(0);
+  // Geführtes Training: am Anfang ist KEINE Übung aktiv — alle sind "geplant".
+  // Tippt man eine an, wird sie zur aktuellen Übung und rutscht nach ganz oben.
+  const [activeIdx, setActiveIdx] = useState<number | null>(null);
   const [doneIdx, setDoneIdx] = useState<Set<number>>(new Set());
+
+  // Übung aktivieren → nach oben holen; Vorschau einklappen, damit sie oben sitzt
+  const activate = (exIdx: number) => {
+    setActiveIdx(exIdx);
+    setShowPreview(false);
+  };
 
   const markDone = (exIdx: number) => {
     setDoneIdx(prev => {
       const next = new Set(prev);
       next.add(exIdx);
-      // zur nächsten noch offenen Übung springen
+      // zur nächsten noch offenen Übung springen (sonst zurück zur Planung)
       const nextOpen = session.findIndex((_, i) => i !== exIdx && !next.has(i));
-      if (nextOpen >= 0) setActiveIdx(nextOpen);
+      setActiveIdx(nextOpen >= 0 ? nextOpen : null);
       return next;
     });
   };
@@ -307,7 +314,7 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
     }
     setSession(names.map(name => ({ name, sets: emptySets() })));
     setEdits({});
-    setActiveIdx(0);
+    setActiveIdx(null);
     setDoneIdx(new Set());
     setSaved(false);
     setShowAddExercise(false);
@@ -427,7 +434,7 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
       name: ex.name,
       sets: ex.sets.map(s => ({ weight: s.weight, reps: s.reps, rir: s.rir, notes: '' })),
     })));
-    setActiveIdx(0);
+    setActiveIdx(null);
     setDoneIdx(new Set());
     setSaved(false);
   };
@@ -494,7 +501,7 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
       prev.forEach(i => { if (i < exIdx) n.add(i); else if (i > exIdx) n.add(i - 1); });
       return n;
     });
-    setActiveIdx(a => (a > exIdx ? a - 1 : a));
+    setActiveIdx(a => (a === null ? null : a === exIdx ? null : a > exIdx ? a - 1 : a));
   };
 
   const handleAddExercise = (name: string, keepOpen = false) => {
@@ -654,7 +661,11 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
       )}
 
       <div className="space-y-3">
-        {session.map((ex, exIdx) => {
+        {(activeIdx === null
+          ? session.map((_, i) => i)
+          : [activeIdx, ...session.map((_, i) => i).filter(i => i !== activeIdx)]
+        ).map((exIdx) => {
+          const ex = session[exIdx];
           const target = targets.get(ex.name) ?? null;
           const TrendMark = target?.trend === 'up' ? TrendingUp
             : target?.trend === 'down' ? TrendingDown : Minus;
@@ -668,8 +679,8 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
           <div key={`${ex.name}-${exIdx}`} className="brutal-card-sm p-3 animate-slide-up"
             style={{ borderLeft: `4px solid ${stripe}`, opacity: isDone && !isActive ? 0.6 : 1 }}>
             <div className="flex items-center justify-between gap-2">
-              {/* Nummer + Name — antippen macht die Übung aktiv */}
-              <button onClick={() => setActiveIdx(exIdx)}
+              {/* Nummer + Name — antippen macht die Übung aktiv (rutscht nach oben) */}
+              <button onClick={() => activate(exIdx)}
                 className="flex items-center gap-2 min-w-0 flex-1 text-left">
                 <span className="w-6 h-6 flex items-center justify-center flex-shrink-0 text-xs font-bold font-mono border"
                   style={isDone
