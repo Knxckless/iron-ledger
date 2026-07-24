@@ -20,7 +20,7 @@ import {
   computeMuscleStats, computeBalance, muscleLabel, round1,
   weeklySetsPerMuscle, WEEKLY_SET_TARGET, dietPhaseProgress,
 } from '../lib/stats';
-import { exportBackup, importBackup, METRIC_INFO } from '../lib/storage';
+import { exportBackup, importBackup, resetAll, METRIC_INFO } from '../lib/storage';
 import type { MetricId } from '../lib/storage';
 import type { Ledger } from '../hooks/useLedger';
 
@@ -47,6 +47,7 @@ export function HomeView({ ledger, onStartTraining }: Props) {
   const [muscleRange, setMuscleRange] = useState(28);
   const [showSettings, setShowSettings] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Körpermetriken
@@ -220,6 +221,12 @@ export function HomeView({ ledger, onStartTraining }: Props) {
     reader.readAsText(file);
   };
 
+  const handleReset = () => {
+    resetAll();
+    // Neu laden → App setzt sich mit leerer Historie + Standard-Übungen/Presets neu auf
+    window.location.reload();
+  };
+
   const today = new Date().toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' });
   const info = METRIC_INFO[metricId];
 
@@ -268,6 +275,28 @@ export function HomeView({ ledger, onStartTraining }: Props) {
               {importMsg}
             </p>
           )}
+
+          {/* Werksreset */}
+          <div className="mt-4 pt-3 border-t" style={{ borderColor: 'var(--color-steel-light)' }}>
+            {confirmReset ? (
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-danger font-mono flex-1">
+                  Wirklich ALLE Daten löschen? Nicht umkehrbar.
+                </span>
+                <button onClick={handleReset}
+                  className="brutal-btn px-3 py-2 text-xs"
+                  style={{ backgroundColor: 'var(--color-danger)', color: '#fff' }}>Ja, löschen</button>
+                <button onClick={() => setConfirmReset(false)}
+                  className="brutal-btn brutal-btn-dark px-3 py-2 text-xs">Abbrechen</button>
+              </div>
+            ) : (
+              <button onClick={() => setConfirmReset(true)}
+                className="w-full py-2.5 flex items-center justify-center gap-2 text-[11px] font-display
+                  tracking-wider uppercase text-danger hover:text-red-300 transition-colors border border-danger">
+                <Trash2 className="w-3.5 h-3.5" /> Alle Daten zurücksetzen
+              </button>
+            )}
+          </div>
         </div>
       )}
 

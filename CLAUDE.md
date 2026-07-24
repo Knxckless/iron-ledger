@@ -102,7 +102,11 @@ MetricEntry { id, date, metric: 'weight'|'waist'|'chest'|'arm'|'thigh', value }
 
 `lib/storage.ts:loadAll()` runs the idempotent v1→v2 migration on startup. Exercise names
 found in history/templates but missing from the library get defs with empty muscle lists
-(flagged in the UI for mapping). First visit seeds 228 CSV entries.
+(flagged in the UI for mapping). The app starts with an empty workout history
+(no auto-seed); default exercises + presets are always available. `resetAll()`
+(Settings → "Alle Daten zurücksetzen") wipes every key back to that clean state.
+`seedData.ts` still ships `EXERCISES_BY_TYPE` (preset exercise names) and the
+parsed `seedWorkouts` array, but the latter is no longer loaded on first visit.
 
 ### Muscle tracking semantics
 

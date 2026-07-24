@@ -5,7 +5,7 @@
 import type { WorkoutEntry, ExerciseDef, WorkoutTemplate, DietPhase, Routine, Settings } from '../data/model';
 import { PRESET_COLORS, PRESET_LABELS } from '../data/model';
 import { DEFAULT_EXERCISES } from '../data/exerciseLibrary';
-import { seedWorkouts, EXERCISES_BY_TYPE } from '../data/seedData';
+import { EXERCISES_BY_TYPE } from '../data/seedData';
 
 export const KEYS = {
   version: 'iron-ledger-version',
@@ -54,12 +54,10 @@ export const METRIC_INFO: Record<MetricId, { label: string; unit: string }> = {
 // ===== Migration =====
 
 function migrateWorkouts(): WorkoutEntry[] {
-  let workouts = readJSON<WorkoutEntry[]>(KEYS.workouts);
-  if (!workouts) {
-    workouts = seedWorkouts.map((w, i) => ({ ...w, id: `seed-${i}` })) as WorkoutEntry[];
-  }
-  // label für alte Einträge ergänzen + neueste zuerst normalisieren
-  // (Seed-Daten liegen aufsteigend vor; App-Logik erwartet workouts[0] = neuestes)
+  // Start mit leerer Historie (kein Auto-Seed). Vorhandene Einträge werden
+  // beibehalten: label ergänzen + neueste zuerst normalisieren (App-Logik
+  // erwartet workouts[0] = neuestes).
+  const workouts = readJSON<WorkoutEntry[]>(KEYS.workouts) ?? [];
   const migrated = workouts
     .map(w => ({ ...w, label: w.label || PRESET_LABELS[w.type] || 'Workout' }))
     .sort((a, b) => b.date.localeCompare(a.date));
@@ -151,6 +149,14 @@ export function loadAll(): LedgerData {
   const settings = migrateSettings();
   localStorage.setItem(KEYS.version, '2');
   return { workouts, exercises, templates, metrics, dietPhases, routines, settings };
+}
+
+// Werksreset: löscht alle App-Daten (inkl. Alt-Keys). Nach einem Reload wird
+// die App neu aufgesetzt — leere Historie, Standard-Übungen + Presets.
+export function resetAll() {
+  Object.values(KEYS).forEach(k => localStorage.removeItem(k));
+  localStorage.removeItem('gym-tracker-bodyweight');
+  localStorage.removeItem('gym-tracker-templates');
 }
 
 // ===== Backup: Export / Import =====
