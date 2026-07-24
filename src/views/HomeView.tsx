@@ -47,7 +47,7 @@ export function HomeView({ ledger, onStartTraining }: Props) {
   const [muscleRange, setMuscleRange] = useState(28);
   const [showSettings, setShowSettings] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
-  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetStep, setResetStep] = useState(0);   // 0 = zu, 1 = 1. Warnung, 2 = letzte Warnung
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Körpermetriken
@@ -222,9 +222,14 @@ export function HomeView({ ledger, onStartTraining }: Props) {
   };
 
   const handleReset = () => {
-    resetAll();
-    // Neu laden → App setzt sich mit leerer Historie + Standard-Übungen/Presets neu auf
-    window.location.reload();
+    // Sicherheitsnetz: erst automatisch ein Backup herunterladen …
+    handleExport();
+    // … dann kurz warten (Download muss starten), löschen und neu laden.
+    setResetStep(0);
+    setTimeout(() => {
+      resetAll();
+      window.location.reload();
+    }, 900);
   };
 
   const today = new Date().toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -276,25 +281,50 @@ export function HomeView({ ledger, onStartTraining }: Props) {
             </p>
           )}
 
-          {/* Werksreset */}
+          {/* Werksreset — zwei Bestätigungen + automatischer Backup-Download */}
           <div className="mt-4 pt-3 border-t" style={{ borderColor: 'var(--color-steel-light)' }}>
-            {confirmReset ? (
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] text-danger font-mono flex-1">
-                  Wirklich ALLE Daten löschen? Nicht umkehrbar.
-                </span>
-                <button onClick={handleReset}
-                  className="brutal-btn px-3 py-2 text-xs"
-                  style={{ backgroundColor: 'var(--color-danger)', color: '#fff' }}>Ja, löschen</button>
-                <button onClick={() => setConfirmReset(false)}
-                  className="brutal-btn brutal-btn-dark px-3 py-2 text-xs">Abbrechen</button>
-              </div>
-            ) : (
-              <button onClick={() => setConfirmReset(true)}
+            {resetStep === 0 && (
+              <button onClick={() => setResetStep(1)}
                 className="w-full py-2.5 flex items-center justify-center gap-2 text-[11px] font-display
                   tracking-wider uppercase text-danger hover:text-red-300 transition-colors border border-danger">
                 <Trash2 className="w-3.5 h-3.5" /> Alle Daten zurücksetzen
               </button>
+            )}
+
+            {resetStep === 1 && (
+              <div className="space-y-2 animate-fade-in">
+                <p className="text-[10px] text-text-dim font-mono">
+                  <span className="text-danger font-bold">Schritt 1 von 2.</span> Das löscht alle
+                  Workouts, Übungen, Maße, Diätphasen und Routinen. Vorher wird automatisch ein
+                  Backup heruntergeladen.
+                </p>
+                <div className="flex gap-2">
+                  <button onClick={() => setResetStep(2)}
+                    className="brutal-btn flex-1 py-2.5 text-xs"
+                    style={{ backgroundColor: 'var(--color-warning)', color: '#000' }}>Weiter</button>
+                  <button onClick={() => setResetStep(0)}
+                    className="brutal-btn brutal-btn-dark flex-1 py-2.5 text-xs">Abbrechen</button>
+                </div>
+              </div>
+            )}
+
+            {resetStep === 2 && (
+              <div className="space-y-2 animate-fade-in">
+                <p className="text-[10px] font-mono">
+                  <span className="text-danger font-bold">Schritt 2 von 2 — endgültig.</span>{' '}
+                  <span className="text-text-dim">Das kann nicht rückgängig gemacht werden. Beim
+                    Klick lädt zuerst dein Backup (JSON) herunter, danach werden alle Daten gelöscht.</span>
+                </p>
+                <div className="flex gap-2">
+                  <button onClick={handleReset}
+                    className="brutal-btn flex-1 py-2.5 text-xs"
+                    style={{ backgroundColor: 'var(--color-danger)', color: '#fff' }}>
+                    <Download className="w-3.5 h-3.5" /> Backup laden & löschen
+                  </button>
+                  <button onClick={() => setResetStep(0)}
+                    className="brutal-btn brutal-btn-dark flex-1 py-2.5 text-xs">Abbrechen</button>
+                </div>
+              </div>
             )}
           </div>
         </div>
