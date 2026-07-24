@@ -5,7 +5,7 @@ import { useMemo, useState, useRef } from 'react';
 import {
   Flame, Calendar, ArrowRight, Zap, Trophy, Scale, Trash2,
   ChevronDown, ChevronUp, Settings, Download, Upload, AlertTriangle,
-  Utensils, Plus, Check, X,
+  Utensils, Plus, Check, X, ListChecks,
 } from 'lucide-react';
 import {
   LineChart, Line, YAxis, XAxis, ResponsiveContainer, Tooltip, ReferenceArea, ReferenceLine, Label,
@@ -26,7 +26,7 @@ import type { Ledger } from '../hooks/useLedger';
 
 interface Props {
   ledger: Ledger;
-  onStartTraining: () => void;
+  onStartTraining: (templateId?: string) => void;
 }
 
 function isoDate(d: Date) {
@@ -40,7 +40,7 @@ const MUSCLE_RANGES = [
 ];
 
 export function HomeView({ ledger, onStartTraining }: Props) {
-  const { workouts, exercisesByName, metrics, addMetric, deleteMetric, reload,
+  const { workouts, templates, routines, settings, exercisesByName, metrics, addMetric, deleteMetric, reload,
     dietPhases, addDietPhase, deleteDietPhase } = ledger;
 
   const [selectedWeek, setSelectedWeek] = useState<number | null>(null);
@@ -89,6 +89,38 @@ export function HomeView({ ledger, onStartTraining }: Props) {
 
     return { total, thisWeek, lastWorkout, streak };
   }, [workouts]);
+
+  // "Heute dran": bei aktiver Routine das nächste Workout (nach dem zuletzt
+  // gemachten, in Routinen-Reihenfolge) + dessen letzte Übungen.
+  const nextUp = useMemo(() => {
+    const routine = routines.find(r => r.id === settings.activeRoutineId);
+    if (!routine || routine.templateIds.length === 0) return null;
+    const tpls = routine.templateIds
+      .map(id => templates.find(t => t.id === id))
+      .filter((t): t is NonNullable<typeof t> => !!t);
+    if (tpls.length === 0) return null;
+
+    const belongs = (w: typeof workouts[number], tpl: typeof tpls[number]) =>
+      w.templateId === tpl.id || (!!tpl.preset && w.type === tpl.preset);
+
+    // jüngstes Training, das zu einem Routine-Workout gehört
+    let lastPos = -1, lastDate = '';
+    for (const w of workouts) {
+      const idx = tpls.findIndex(t => belongs(w, t));
+      if (idx >= 0 && w.date >= lastDate) { lastDate = w.date; lastPos = idx; }
+    }
+    const next = tpls[lastPos < 0 ? 0 : (lastPos + 1) % tpls.length];
+
+    const sessions = workouts.filter(w => belongs(w, next)).sort((a, b) => b.date.localeCompare(a.date));
+    const last = sessions[0];
+    const exercises = last
+      ? last.exercises.map(ex => {
+          const valid = ex.sets.filter(s => s.weight > 0 && s.reps > 0);
+          return { name: ex.name, setCount: valid.length, top: valid.reduce((m, s) => Math.max(m, s.weight), 0) };
+        })
+      : next.exerciseNames.map(n => ({ name: n, setCount: 0, top: 0 }));
+    return { workout: next, exercises, lastDate: last?.date, routineName: routine.name };
+  }, [routines, settings, templates, workouts]);
 
   // Muskel-Tracking im gewählten Zeitraum
   const { muscleStats, balance } = useMemo(() => {
@@ -328,6 +360,49 @@ export function HomeView({ ledger, onStartTraining }: Props) {
             )}
           </div>
         </div>
+      )}
+
+      {/* HEUTE DRAN — nächstes Workout der aktiven Routine */}
+      {nextUp && (
+        <button onClick={() => onStartTraining(nextUp.workout.id)}
+          className="w-full text-left brutal-card-sm p-3 mb-5 animate-slide-up hover:brightness-110 transition-all"
+          style={{ borderLeft: `4px solid ${nextUp.workout.color}` }}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <ListChecks className="w-4 h-4 flex-shrink-0" style={{ color: nextUp.workout.color }} />
+              <span className="text-[10px] text-text-muted font-mono uppercase tracking-wider">Heute dran</span>
+              <span className="text-sm font-bold text-text font-display tracking-wider truncate">{nextUp.workout.name}</span>
+            </div>
+            <span className="flex items-center gap-1 text-[10px] font-display tracking-wider uppercase flex-shrink-0"
+              style={{ color: nextUp.workout.color }}>
+              Start <ArrowRight className="w-3.5 h-3.5" />
+            </span>
+          </div>
+          {nextUp.exercises.length > 0 ? (
+            <div className="space-y-0.5">
+              {nextUp.exercises.map((e, i) => (
+                <div key={`${e.name}-${i}`} className="flex items-center gap-2 text-[11px] font-mono">
+                  <span className="text-text-muted w-4 text-right">{i + 1}.</span>
+                  <span className="text-text-dim flex-1 truncate">{e.name}</span>
+                  {e.setCount > 0 && (
+                    <span className="px-1.5 py-0.5 border text-[10px] font-bold flex-shrink-0"
+                      style={{ backgroundColor: 'var(--color-concrete)', borderColor: '#3d3d3d', color: 'var(--color-text)' }}>
+                      {e.setCount}×
+                    </span>
+                  )}
+                  {e.top > 0 && <span className="text-accent w-12 text-right">{e.top}kg</span>}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[10px] text-text-muted font-mono">Noch keine Übungen — im Training zusammenstellen.</p>
+          )}
+          {nextUp.lastDate && (
+            <p className="text-[9px] text-text-muted font-mono mt-1.5">
+              zuletzt {new Date(nextUp.lastDate).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })} · Routine {nextUp.routineName}
+            </p>
+          )}
+        </button>
       )}
 
       {/* QUICK STATS */}
@@ -737,7 +812,7 @@ export function HomeView({ ledger, onStartTraining }: Props) {
       </div>
 
       {/* CTA */}
-      <button onClick={onStartTraining}
+      <button onClick={() => onStartTraining()}
         className="brutal-btn brutal-btn-accent w-full py-4 animate-slam-in animate-pulse-border"
         style={{ fontSize: '1.3rem' }}>
         <span>Training starten</span>

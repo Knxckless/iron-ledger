@@ -5,6 +5,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Save, Plus, X, Dumbbell, ChevronDown, ChevronUp, Timer,
   Copy, Trophy, Pause, Play, RotateCcw, ClipboardList, TrendingUp, TrendingDown, Minus, Target, ListChecks,
+  Check, Circle,
 } from 'lucide-react';
 import type { WorkoutEntry, ExerciseEntry, WorkoutTemplate } from '../data/model';
 import { MUSCLE_BY_ID } from '../data/muscles';
@@ -15,6 +16,7 @@ import type { Ledger } from '../hooks/useLedger';
 
 interface Props {
   ledger: Ledger;
+  initialTemplateId?: string;   // von "Heute dran" auf Start: dieses Workout vorwählen
 }
 
 const TIMER_PRESETS = [60, 90, 120, 180];
@@ -47,21 +49,90 @@ function RestTimer() {
   const [remaining, setRemaining] = useState(90);
   const [running, setRunning] = useState(false);
   const endRef = useRef(0);
+  const audioRef = useRef<AudioContext | null>(null);
+  const wakeRef = useRef<WakeLockSentinel | null>(null);
+  const firedRef = useRef(false);
+
+  // Audio-Kontext auf Nutzergeste anlegen/entsperren (nötig fürs Piepen)
+  const ensureAudio = () => {
+    if (!audioRef.current) {
+      const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (AC) audioRef.current = new AC();
+    }
+    if (audioRef.current?.state === 'suspended') void audioRef.current.resume();
+    return audioRef.current;
+  };
+
+  // Drei kurze Pieptöne
+  const beep = () => {
+    const ctx = audioRef.current;
+    if (!ctx) return;
+    const t0 = ctx.currentTime;
+    [0, 0.28, 0.56].forEach((t, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = i === 2 ? 1320 : 880;
+      gain.gain.setValueAtTime(0.0001, t0 + t);
+      gain.gain.exponentialRampToValueAtTime(0.5, t0 + t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + t + 0.22);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(t0 + t); osc.stop(t0 + t + 0.24);
+    });
+  };
+
+  const notify = () => {
+    try {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('Pause vorbei 💪', { body: 'GO! Nächster Satz.', tag: 'rest-timer' });
+      }
+    } catch { /* ignore */ }
+  };
+
+  // Wake Lock: Bildschirm bleibt während der Pause an (damit Ton/Vibration sicher feuern)
+  const acquireWake = async () => {
+    try {
+      if ('wakeLock' in navigator && !wakeRef.current) {
+        wakeRef.current = await navigator.wakeLock.request('screen');
+      }
+    } catch { /* ignore */ }
+  };
+  const releaseWake = () => {
+    try { void wakeRef.current?.release(); } catch { /* ignore */ }
+    wakeRef.current = null;
+  };
 
   useEffect(() => {
     if (!running) return;
+    firedRef.current = false;
     const tick = window.setInterval(() => {
       const left = Math.max(0, Math.round((endRef.current - Date.now()) / 1000));
       setRemaining(left);
-      if (left === 0) {
+      if (left === 0 && !firedRef.current) {
+        firedRef.current = true;
         setRunning(false);
-        if ('vibrate' in navigator) navigator.vibrate([200, 100, 200, 100, 400]);
+        navigator.vibrate?.([300, 120, 300, 120, 500]);
+        beep();
+        notify();
+        releaseWake();
       }
     }, 250);
     return () => clearInterval(tick);
   }, [running]);
 
+  // Wake Lock nach Tab-Wechsel erneut anfordern (Browser gibt ihn beim Wegwischen frei)
+  useEffect(() => {
+    const onVis = () => { if (document.visibilityState === 'visible' && running) void acquireWake(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [running]);
+
+  useEffect(() => () => releaseWake(), []);
+
   const start = (secs: number) => {
+    ensureAudio();
+    if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
+    void acquireWake();
     setDuration(secs);
     setRemaining(secs);
     endRef.current = Date.now() + secs * 1000;
@@ -69,6 +140,8 @@ function RestTimer() {
   };
 
   const resume = () => {
+    ensureAudio();
+    void acquireWake();
     endRef.current = Date.now() + remaining * 1000;
     setRunning(true);
   };
@@ -99,7 +172,7 @@ function RestTimer() {
             </button>
           ))}
         </div>
-        <button onClick={() => { setRunning(false); setRemaining(duration); setVisible(false); }}
+        <button onClick={() => { setRunning(false); setRemaining(duration); releaseWake(); setVisible(false); }}
           className="text-text-muted hover:text-danger p-1"><X className="w-4 h-4" /></button>
       </div>
       <div className="flex items-center gap-3">
@@ -116,14 +189,14 @@ function RestTimer() {
         </div>
         <div className="flex gap-1">
           {running ? (
-            <button onClick={() => setRunning(false)} className="brutal-chip px-2.5 py-1.5">
+            <button onClick={() => { setRunning(false); releaseWake(); }} className="brutal-chip px-2.5 py-1.5">
               <Pause className="w-3.5 h-3.5" /></button>
           ) : (
             <button onClick={() => remaining > 0 && remaining < duration ? resume() : start(duration)}
               className="brutal-chip px-2.5 py-1.5 active">
               <Play className="w-3.5 h-3.5" /></button>
           )}
-          <button onClick={() => { setRunning(false); setRemaining(duration); }}
+          <button onClick={() => { setRunning(false); setRemaining(duration); releaseWake(); }}
             className="brutal-chip px-2.5 py-1.5"><RotateCcw className="w-3.5 h-3.5" /></button>
         </div>
       </div>
@@ -174,7 +247,7 @@ function PRCelebration({ prs, onClose }: { prs: NewPR[]; onClose: () => void }) 
 
 // ===== Hauptview =====
 
-export function TodayView({ ledger }: Props) {
+export function TodayView({ ledger, initialTemplateId }: Props) {
   const { templates, exercises: libraryExercises, exercisesByName, workouts, addWorkout, addExercise,
     routines, settings } = ledger;
 
@@ -203,6 +276,25 @@ export function TodayView({ ledger }: Props) {
   const [newExerciseName, setNewExerciseName] = useState('');
   const [expandedRefs, setExpandedRefs] = useState<Set<string>>(new Set());
 
+  // Geführtes Training: nur die aktive Übung ist aufgeklappt, fertige werden abgehakt.
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [doneIdx, setDoneIdx] = useState<Set<number>>(new Set());
+
+  const markDone = (exIdx: number) => {
+    setDoneIdx(prev => {
+      const next = new Set(prev);
+      next.add(exIdx);
+      // zur nächsten noch offenen Übung springen
+      const nextOpen = session.findIndex((_, i) => i !== exIdx && !next.has(i));
+      if (nextOpen >= 0) setActiveIdx(nextOpen);
+      return next;
+    });
+  };
+  const reopen = (exIdx: number) => {
+    setDoneIdx(prev => { const n = new Set(prev); n.delete(exIdx); return n; });
+    setActiveIdx(exIdx);
+  };
+
   // Standard-Belegung = Übungen der letzten Session dieses Workouts (leere Sätze).
   // Erst wenn es noch keine Session gibt, greift die Template-Liste aus dem Builder.
   const loadTemplate = useCallback((tpl: WorkoutTemplate | undefined) => {
@@ -215,6 +307,8 @@ export function TodayView({ ledger }: Props) {
     }
     setSession(names.map(name => ({ name, sets: emptySets() })));
     setEdits({});
+    setActiveIdx(0);
+    setDoneIdx(new Set());
     setSaved(false);
     setShowAddExercise(false);
   }, [workouts]);
@@ -241,6 +335,15 @@ export function TodayView({ ledger }: Props) {
     setTemplateId(id);
     loadTemplate(templates.find(t => t.id === id));
   };
+
+  // "Heute dran" auf Start hat ein Workout vorgewählt → hier übernehmen
+  useEffect(() => {
+    if (initialTemplateId && templates.some(t => t.id === initialTemplateId)) {
+      setTemplateId(initialTemplateId);
+      loadTemplate(templates.find(t => t.id === initialTemplateId));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTemplateId]);
 
   // Muskeln, die die heutige Session trifft (aus der Bibliothek abgeleitet)
   const sessionMuscles = useMemo(() => {
@@ -324,6 +427,8 @@ export function TodayView({ ledger }: Props) {
       name: ex.name,
       sets: ex.sets.map(s => ({ weight: s.weight, reps: s.reps, rir: s.rir, notes: '' })),
     })));
+    setActiveIdx(0);
+    setDoneIdx(new Set());
     setSaved(false);
   };
 
@@ -383,6 +488,13 @@ export function TodayView({ ledger }: Props) {
 
   const removeSessionExercise = (exIdx: number) => {
     setSession(prev => prev.filter((_, i) => i !== exIdx));
+    // Fertig-Markierungen an die verschobenen Indizes anpassen
+    setDoneIdx(prev => {
+      const n = new Set<number>();
+      prev.forEach(i => { if (i < exIdx) n.add(i); else if (i > exIdx) n.add(i - 1); });
+      return n;
+    });
+    setActiveIdx(a => (a > exIdx ? a - 1 : a));
   };
 
   const handleAddExercise = (name: string, keepOpen = false) => {
@@ -392,7 +504,11 @@ export function TodayView({ ledger }: Props) {
       // Neue Übung landet automatisch in der Bibliothek (Muskeln später zuordnen)
       addExercise({ name: trimmed, equipment: 'machine', muscles: [] });
     }
-    setSession(prev => prev.some(s => s.name === trimmed) ? prev : [...prev, { name: trimmed, sets: emptySets() }]);
+    setSession(prev => {
+      if (prev.some(s => s.name === trimmed)) return prev;
+      setActiveIdx(prev.length);   // neue Übung wird aktiv
+      return [...prev, { name: trimmed, sets: emptySets() }];
+    });
     setNewExerciseName('');
     if (!keepOpen) setShowAddExercise(false);
   };
@@ -544,34 +660,71 @@ export function TodayView({ ledger }: Props) {
             : target?.trend === 'down' ? TrendingDown : Minus;
           const trendCol = target?.trend === 'up' ? 'var(--color-success)'
             : target?.trend === 'down' ? 'var(--color-danger)' : 'var(--color-text-muted)';
+          const isActive = exIdx === activeIdx;
+          const isDone = doneIdx.has(exIdx);
+          const loggedSets = ex.sets.filter(s => s.weight > 0 && s.reps > 0).length;
+          const stripe = isDone ? 'var(--color-success)' : isActive ? accentColor : '#3d3d3d';
           return (
           <div key={`${ex.name}-${exIdx}`} className="brutal-card-sm p-3 animate-slide-up"
-            style={{ borderLeft: `4px solid ${accentColor}` }}>
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="text-sm font-bold text-text font-display tracking-wider truncate">{ex.name}</span>
-                <button onClick={() => toggleRef(ex.name)}
-                  className="text-[10px] text-text-muted hover:text-accent transition-colors font-mono
-                    flex items-center gap-0.5 brutal-chip px-1.5 py-0.5 flex-shrink-0">
-                  Verlauf
-                  {expandedRefs.has(ex.name)
-                    ? <ChevronUp className="w-3 h-3" />
-                    : <ChevronDown className="w-3 h-3" />}
-                </button>
-              </div>
+            style={{ borderLeft: `4px solid ${stripe}`, opacity: isDone && !isActive ? 0.6 : 1 }}>
+            <div className="flex items-center justify-between gap-2">
+              {/* Nummer + Name — antippen macht die Übung aktiv */}
+              <button onClick={() => setActiveIdx(exIdx)}
+                className="flex items-center gap-2 min-w-0 flex-1 text-left">
+                <span className="w-6 h-6 flex items-center justify-center flex-shrink-0 text-xs font-bold font-mono border"
+                  style={isDone
+                    ? { backgroundColor: 'var(--color-success)', color: '#000', borderColor: '#000' }
+                    : isActive
+                      ? { backgroundColor: accentColor, color: '#000', borderColor: '#000' }
+                      : { color: 'var(--color-text-dim)', borderColor: '#3d3d3d' }}>
+                  {exIdx + 1}
+                </span>
+                <span className={`text-sm font-bold text-text font-display tracking-wider truncate ${isDone ? 'line-through' : ''}`}>
+                  {ex.name}
+                </span>
+              </button>
               <div className="flex items-center gap-2 flex-shrink-0">
-                <span className="text-xs text-text-muted font-mono">{ex.sets.length}S</span>
-                <button onClick={() => removeSessionExercise(exIdx)}
-                  className="text-text-muted hover:text-danger transition-colors p-1"
-                  title="Aus dieser Session entfernen">
-                  <X className="w-4 h-4" />
+                <span className="text-xs text-text-muted font-mono">
+                  {isDone || !isActive ? `${loggedSets || ex.sets.length}×` : `${ex.sets.length}S`}
+                </span>
+                {isActive && (
+                  <button onClick={() => removeSessionExercise(exIdx)}
+                    className="text-text-muted hover:text-danger transition-colors p-1"
+                    title="Aus dieser Session entfernen">
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+                {/* Fertig-Haken */}
+                <button onClick={() => isDone ? reopen(exIdx) : markDone(exIdx)}
+                  className="p-0.5 transition-colors" title={isDone ? 'Wieder öffnen' : 'Übung fertig'}>
+                  {isDone
+                    ? <Check className="w-5 h-5" style={{ color: 'var(--color-success)' }} />
+                    : <Circle className="w-5 h-5 text-text-muted hover:text-success" />}
                 </button>
               </div>
             </div>
 
+            {/* Eingeklappt: kurze Ziel-/Zuletzt-Zeile zum schnellen Überblick */}
+            {!isActive && target && (
+              <div className="mt-1.5 ml-8 text-[10px] font-mono text-text-muted">
+                {isDone
+                  ? <span className="text-success">erledigt</span>
+                  : <>Ziel <span className="text-text-dim">{fmtNum(target.weight)}kg × {fmtNum(target.reps)}</span></>}
+              </div>
+            )}
+
+            {/* Aktive Übung: volle Eingabe */}
+            {isActive && (<>
+            <button onClick={() => toggleRef(ex.name)}
+              className="mt-2 text-[10px] text-text-muted hover:text-accent transition-colors font-mono
+                flex items-center gap-0.5 brutal-chip px-1.5 py-0.5 w-fit">
+              Verlauf
+              {expandedRefs.has(ex.name) ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            </button>
+
             {/* Zuletzt + Zielvorschlag (aus Verlauf) */}
             {target && (
-              <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mb-2 text-[10px] font-mono">
+              <div className="flex items-center flex-wrap gap-x-3 gap-y-1 my-2 text-[10px] font-mono">
                 <span className="text-text-muted">
                   Zuletzt: <span className="text-text-dim">{fmtNum(target.lastWeight)}kg × {fmtNum(target.lastReps)}</span>
                   {target.lastRir != null && (
@@ -582,7 +735,7 @@ export function TodayView({ ledger }: Props) {
                 <span className="flex items-center gap-1 px-1.5 py-0.5 border"
                   style={{ borderColor: accentColor, color: 'var(--color-text)' }}>
                   <Target className="w-3 h-3" style={{ color: accentColor }} />
-                  Ziel {target.weight}kg × {target.reps}
+                  Ziel {fmtNum(target.weight)}kg × {fmtNum(target.reps)}
                   <TrendMark className="w-3 h-3" style={{ color: trendCol }} />
                 </span>
               </div>
@@ -660,6 +813,15 @@ export function TodayView({ ledger }: Props) {
                 font-display tracking-wider uppercase py-1">
               <Plus className="w-3 h-3" /> Satz
             </button>
+
+            {/* Übung abhaken → springt zur nächsten offenen Übung */}
+            <button onClick={() => markDone(exIdx)}
+              className="brutal-btn w-full py-2.5 mt-3 text-sm"
+              style={{ backgroundColor: 'var(--color-success)', color: '#000' }}>
+              <Check className="w-4 h-4" />
+              {doneIdx.size + 1 >= session.length ? 'Übung fertig' : 'Fertig → nächste Übung'}
+            </button>
+            </>)}
           </div>
           );
         })}

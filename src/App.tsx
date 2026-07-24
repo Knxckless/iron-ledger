@@ -19,8 +19,12 @@ const TABS: { key: Tab; icon: typeof Home; label: string }[] = [
 
 function App() {
   const [tab, setTab] = useState<Tab>('home');
+  const [pendingTemplateId, setPendingTemplateId] = useState<string | undefined>();
   const ledger = useLedger();
-  const handleStartTraining = useCallback(() => setTab('today'), []);
+  const handleStartTraining = useCallback((templateId?: string) => {
+    setPendingTemplateId(templateId);
+    setTab('today');
+  }, []);
 
   if (!ledger.ready) {
     return (
@@ -42,7 +46,7 @@ function App() {
       <main className="flex-1 overflow-y-auto pb-20">
         <div key={tab} className="animate-fade-in">
           {tab === 'home' && <HomeView ledger={ledger} onStartTraining={handleStartTraining} />}
-          {tab === 'today' && <TodayView ledger={ledger} />}
+          {tab === 'today' && <TodayView ledger={ledger} initialTemplateId={pendingTemplateId} />}
           {tab === 'library' && <LibraryView ledger={ledger} />}
           {tab === 'history' && <HistoryView ledger={ledger} />}
           {tab === 'progress' && <ProgressView ledger={ledger} />}
