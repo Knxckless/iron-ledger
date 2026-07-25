@@ -32,6 +32,7 @@ export function NutritionView({ ledger }: Props) {
   const [wVal, setWVal] = useState('');
   const [nDate, setNDate] = useState(today);
   const [kcal, setKcal] = useState('');
+  const [burned, setBurned] = useState('');
   const [protein, setProtein] = useState('');
   const [showProfile, setShowProfile] = useState(false);
 
@@ -81,10 +82,12 @@ export function NutritionView({ ledger }: Props) {
 
   // Kalorien-Log
   const nutriSorted = useMemo(() => [...nutrition].sort((a, b) => b.date.localeCompare(a.date)), [nutrition]);
-  const weeklyAvg = useMemo(() => {
+  // Netto = gegessen − Sport. Das ist der Wert, der zum Ziel/Defizit zählt.
+  const netOf = (n: { kcal: number; burned?: number }) => n.kcal - (n.burned || 0);
+  const weeklyNetAvg = useMemo(() => {
     const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 7);
     const recent = nutrition.filter(n => new Date(n.date) >= cutoff && n.kcal > 0);
-    return recent.length ? Math.round(recent.reduce((a, n) => a + n.kcal, 0) / recent.length) : null;
+    return recent.length ? Math.round(recent.reduce((a, n) => a + netOf(n), 0) / recent.length) : null;
   }, [nutrition]);
 
   const RateIcon = rate == null ? Minus : rate < -0.05 ? TrendingDown : rate > 0.05 ? TrendingUp : Minus;
@@ -240,35 +243,91 @@ export function NutritionView({ ledger }: Props) {
             <Target className="w-4 h-4 text-accent" />
             <h3 className="text-xs font-bold text-text font-display tracking-wider uppercase">Kalorien-Log</h3>
           </div>
-          {weeklyAvg && <span className="text-[10px] text-text-dim font-mono">Ø 7 T: <span className="text-text font-bold">{weeklyAvg}</span> kcal</span>}
+          {weeklyNetAvg != null && (
+            <span className="text-[10px] text-text-dim font-mono">
+              Ø 7 T netto: <span className="font-bold"
+                style={{ color: targetKcal && weeklyNetAvg <= targetKcal ? 'var(--color-success)' : 'var(--color-text)' }}>
+                {weeklyNetAvg}
+              </span> kcal
+            </span>
+          )}
         </div>
 
-        <div className="flex gap-2 mb-2">
-          <input type="date" value={nDate} onChange={e => setNDate(e.target.value)}
-            className="brutal-input px-2 py-2 text-xs font-mono flex-1 min-w-0" />
-          <input type="number" inputMode="numeric" placeholder="kcal" value={kcal} onChange={e => setKcal(e.target.value)}
-            className="brutal-input w-20 px-2 py-2 text-sm text-center font-mono" />
-          <input type="number" inputMode="numeric" placeholder="Prot." value={protein} onChange={e => setProtein(e.target.value)}
-            className="brutal-input w-16 px-2 py-2 text-sm text-center font-mono" />
-          <button onClick={() => { const k = parseInt(kcal); if (!isNaN(k) && k > 0) { const pr = parseInt(protein); addNutrition(nDate, k, isNaN(pr) ? undefined : pr); setKcal(''); setProtein(''); } }}
+        {/* Datum */}
+        <input type="date" value={nDate} onChange={e => setNDate(e.target.value)}
+          className="brutal-input w-full px-2 py-2 text-xs font-mono mb-1.5" />
+        {/* Gegessen · +Sport · Protein · OK */}
+        <div className="flex gap-1.5 mb-1">
+          <div className="flex-1 min-w-0">
+            <span className="block text-[8px] text-text-muted font-mono uppercase tracking-wider mb-0.5 text-center">Gegessen</span>
+            <input type="number" inputMode="numeric" placeholder="kcal" value={kcal} onChange={e => setKcal(e.target.value)}
+              className="brutal-input w-full px-1 py-2 text-sm text-center font-mono" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <span className="block text-[8px] text-warning font-mono uppercase tracking-wider mb-0.5 text-center">+ Sport</span>
+            <input type="number" inputMode="numeric" placeholder="kcal" value={burned} onChange={e => setBurned(e.target.value)}
+              className="brutal-input w-full px-1 py-2 text-sm text-center font-mono"
+              style={{ color: 'var(--color-warning)' }} title="Extra verbrannte Kalorien (Cardio/Sport)" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <span className="block text-[8px] text-text-muted font-mono uppercase tracking-wider mb-0.5 text-center">Protein g</span>
+            <input type="number" inputMode="numeric" placeholder="g" value={protein} onChange={e => setProtein(e.target.value)}
+              className="brutal-input w-full px-1 py-2 text-sm text-center font-mono" />
+          </div>
+          <button onClick={() => {
+            const k = parseInt(kcal);
+            if (isNaN(k) || k <= 0) return;
+            const pr = parseInt(protein);
+            const bn = parseInt(burned);
+            addNutrition(nDate, k, isNaN(pr) ? undefined : pr, isNaN(bn) || bn <= 0 ? undefined : bn);
+            setKcal(''); setProtein(''); setBurned('');
+          }}
             disabled={!kcal.trim()}
-            className="brutal-btn brutal-btn-accent px-3 py-2 text-xs">OK</button>
+            className="brutal-btn brutal-btn-accent px-3 self-end py-2 text-xs">OK</button>
         </div>
+        {/* Live-Netto-Vorschau bei aktivem Sport-Eintrag */}
+        {(() => {
+          const k = parseInt(kcal); const bn = parseInt(burned);
+          if (isNaN(k) || isNaN(bn) || bn <= 0) return null;
+          return (
+            <p className="text-[10px] font-mono text-text-muted mb-2">
+              Netto: <span className="text-text font-bold">{k} − {bn} = {k - bn} kcal</span>
+              {targetKcal && <span> · Ziel {targetKcal}</span>}
+            </p>
+          );
+        })()}
+        <p className="text-[9px] text-text-muted font-mono mb-2">
+          Netto = Gegessen − Sport. Der Sport erhöht dein Tagesbudget, dein Defizit bleibt gleich.
+        </p>
 
         {nutriSorted.length > 0 ? (
-          <div className="space-y-1 max-h-40 overflow-y-auto">
-            {nutriSorted.slice(0, 8).map(n => (
-              <div key={n.id} className="flex items-center justify-between py-1 px-2 brutal-card-inset">
-                <span className="text-xs text-text-dim font-mono">{fmtDate(n.date)}</span>
-                <div className="flex items-center gap-3">
-                  <span className="text-sm text-text font-bold font-mono">{n.kcal} kcal</span>
-                  {n.protein != null && <span className="text-[10px] text-text-muted font-mono">{n.protein}g P</span>}
-                  <button onClick={() => deleteNutrition(n.id)} className="text-text-muted hover:text-danger transition-colors p-0.5">
-                    <Trash2 className="w-3 h-3" />
-                  </button>
+          <div className="space-y-1 max-h-44 overflow-y-auto">
+            {nutriSorted.slice(0, 8).map(n => {
+              const net = netOf(n);
+              const hasSport = (n.burned || 0) > 0;
+              return (
+                <div key={n.id} className="flex items-center justify-between py-1 px-2 brutal-card-inset">
+                  <span className="text-xs text-text-dim font-mono">{fmtDate(n.date)}</span>
+                  <div className="flex items-center gap-2.5">
+                    {hasSport ? (
+                      <span className="font-mono text-right leading-tight">
+                        <span className="text-sm text-text font-bold">{net}</span>
+                        <span className="text-[9px] text-text-muted"> netto</span>
+                        <span className="block text-[9px] text-text-muted">
+                          {n.kcal} − <span className="text-warning">{n.burned}</span>
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="text-sm text-text font-bold font-mono">{n.kcal} kcal</span>
+                    )}
+                    {n.protein != null && <span className="text-[10px] text-text-muted font-mono">{n.protein}g P</span>}
+                    <button onClick={() => deleteNutrition(n.id)} className="text-text-muted hover:text-danger transition-colors p-0.5">
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <p className="text-[10px] text-text-muted font-mono text-center py-2">Noch keine Kalorien-Einträge</p>

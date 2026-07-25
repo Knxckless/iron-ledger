@@ -48,7 +48,8 @@ export interface MetricEntry {
 export interface NutritionEntry {
   id: string;
   date: string;
-  kcal: number;
+  kcal: number;              // gegessen (brutto)
+  burned?: number;           // extra verbrannt (Cardio/Sport) → erhöht das Tagesbudget
   protein?: number;
 }
 

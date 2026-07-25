@@ -255,15 +255,15 @@ export function useLedger() {
 
   // ===== Kalorien-/Protein-Log (ein Eintrag pro Tag) =====
 
-  const addNutrition = useCallback((date: string, kcal: number, protein?: number) => {
+  const addNutrition = useCallback((date: string, kcal: number, protein?: number, burned?: number) => {
     setNutrition(prev => {
       const idx = prev.findIndex(e => e.date === date);
       let updated: NutritionEntry[];
       if (idx >= 0) {
         updated = [...prev];
-        updated[idx] = { ...updated[idx], kcal, protein };
+        updated[idx] = { ...updated[idx], kcal, protein, burned };
       } else {
-        updated = [{ id: crypto.randomUUID(), date, kcal, protein }, ...prev];
+        updated = [{ id: crypto.randomUUID(), date, kcal, protein, burned }, ...prev];
       }
       updated.sort((a, b) => b.date.localeCompare(a.date));
       writeJSON(KEYS.nutrition, updated);
