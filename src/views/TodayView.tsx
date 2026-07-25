@@ -10,7 +10,7 @@ import {
 import type { WorkoutEntry, ExerciseEntry, WorkoutTemplate } from '../data/model';
 import { MUSCLE_BY_ID } from '../data/muscles';
 import type { MuscleId } from '../data/muscles';
-import { detectNewPRs, round1, suggestNextTarget } from '../lib/stats';
+import { detectNewPRs, round1, suggestNextTarget, nextUpTemplateId } from '../lib/stats';
 import type { NewPR, TargetSuggestion } from '../lib/stats';
 import type { Ledger } from '../hooks/useLedger';
 import { readJSON, writeJSON, KEYS } from '../lib/storage';
@@ -445,11 +445,16 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
       setInitialized(true);
       return;
     }
-    // 3) Standard
-    loadTemplate(template);
-    setTemplateId(template.id);
+    // 3) Standard: das „Als Nächstes dran"-Workout der aktiven Routine
+    //    (gleiche Logik wie auf der Startseite), sonst das erste sichtbare.
+    const suggestedId = nextUpTemplateId(activeRoutine, templates, workouts);
+    const startTpl =
+      (suggestedId && (visibleTemplates.find(t => t.id === suggestedId) ?? templates.find(t => t.id === suggestedId)))
+      || template;
+    setTemplateId(startTpl.id);
+    loadTemplate(startTpl);
     setInitialized(true);
-  }, [initialized, template, templates, initialTemplateId, loadTemplate]);
+  }, [initialized, template, templates, initialTemplateId, activeRoutine, visibleTemplates, workouts, loadTemplate]);
 
   // Routinenwechsel: fällt das gewählte Workout aus der Auswahl, aufs erste springen
   useEffect(() => {

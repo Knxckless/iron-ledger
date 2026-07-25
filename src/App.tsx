@@ -1,19 +1,18 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useLedger } from './hooks/useLedger';
 import { HomeView } from './views/HomeView';
 import { TodayView } from './views/TodayView';
-import { LibraryView } from './views/LibraryView';
 import { HistoryView } from './views/HistoryView';
 import { ProgressView } from './views/ProgressView';
 import { NutritionView } from './views/NutritionView';
-import { Home, Dumbbell, BookOpen, Clock, TrendingUp, Apple } from 'lucide-react';
+import { SettingsView } from './views/SettingsView';
+import { Home, Dumbbell, Clock, TrendingUp, Apple } from 'lucide-react';
 
-type Tab = 'home' | 'today' | 'library' | 'history' | 'progress' | 'nutrition';
+type Tab = 'home' | 'today' | 'nutrition' | 'history' | 'progress';
 
 const TABS: { key: Tab; icon: typeof Home; label: string }[] = [
   { key: 'home', icon: Home, label: 'Start' },
   { key: 'today', icon: Dumbbell, label: 'Training' },
-  { key: 'library', icon: BookOpen, label: 'Übungen' },
   { key: 'nutrition', icon: Apple, label: 'Diät' },
   { key: 'history', icon: Clock, label: 'Verlauf' },
   { key: 'progress', icon: TrendingUp, label: 'Charts' },
@@ -22,9 +21,12 @@ const TABS: { key: Tab; icon: typeof Home; label: string }[] = [
 function App() {
   const [tab, setTab] = useState<Tab>('home');
   const [pendingTemplateId, setPendingTemplateId] = useState<string | undefined>();
+  const [showSettings, setShowSettings] = useState(false);
   const ledger = useLedger();
+
   const handleStartTraining = useCallback((templateId?: string) => {
     setPendingTemplateId(templateId);
+    setShowSettings(false);
     setTab('today');
   }, []);
 
@@ -33,6 +35,36 @@ function App() {
   useEffect(() => {
     if (tab !== 'today' && pendingTemplateId !== undefined) setPendingTemplateId(undefined);
   }, [tab, pendingTemplateId]);
+
+  const selectTab = useCallback((key: Tab) => { setShowSettings(false); setTab(key); }, []);
+
+  // Wischen nach links/rechts wechselt den Tab. Gesten auf horizontal scroll-
+  // baren Elementen (Chip-Leisten, Chart-Brush) oder Eingaben werden ignoriert.
+  const touchRef = useRef<{ x: number; y: number; skip: boolean } | null>(null);
+  const onTouchStart = (e: React.TouchEvent) => {
+    if (showSettings || e.touches.length !== 1) { touchRef.current = null; return; }
+    const t = e.touches[0];
+    let skip = false;
+    let el = e.target as HTMLElement | null;
+    if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) skip = true;
+    while (el && el !== e.currentTarget) {
+      const ox = getComputedStyle(el).overflowX;
+      if ((ox === 'auto' || ox === 'scroll') && el.scrollWidth > el.clientWidth + 4) { skip = true; break; }
+      el = el.parentElement;
+    }
+    touchRef.current = { x: t.clientX, y: t.clientY, skip };
+  };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const s = touchRef.current;
+    touchRef.current = null;
+    if (!s || s.skip) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - s.x, dy = t.clientY - s.y;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.8) return;
+    const idx = TABS.findIndex(x => x.key === tab);
+    const ni = dx < 0 ? Math.min(idx + 1, TABS.length - 1) : Math.max(idx - 1, 0);
+    if (TABS[ni].key !== tab) setTab(TABS[ni].key);
+  };
 
   if (!ledger.ready) {
     return (
@@ -51,15 +83,21 @@ function App() {
 
   return (
     <div className="h-full flex flex-col max-w-lg mx-auto noise-bg overflow-x-hidden" style={{ backgroundColor: 'var(--color-bg)' }}>
-      <main className="flex-1 overflow-y-auto overflow-x-hidden pb-20">
-        <div key={tab} className="animate-fade-in">
-          {tab === 'home' && <HomeView ledger={ledger} onStartTraining={handleStartTraining} />}
-          {tab === 'today' && <TodayView ledger={ledger} initialTemplateId={pendingTemplateId} />}
-          {tab === 'library' && <LibraryView ledger={ledger} />}
-          {tab === 'nutrition' && <NutritionView ledger={ledger} />}
-          {tab === 'history' && <HistoryView ledger={ledger} />}
-          {tab === 'progress' && <ProgressView ledger={ledger} />}
-        </div>
+      <main className="flex-1 overflow-y-auto overflow-x-hidden pb-20"
+        onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+        {showSettings ? (
+          <div className="animate-fade-in">
+            <SettingsView ledger={ledger} onClose={() => setShowSettings(false)} />
+          </div>
+        ) : (
+          <div key={tab} className="animate-fade-in">
+            {tab === 'home' && <HomeView ledger={ledger} onStartTraining={handleStartTraining} onOpenSettings={() => setShowSettings(true)} />}
+            {tab === 'today' && <TodayView ledger={ledger} initialTemplateId={pendingTemplateId} />}
+            {tab === 'nutrition' && <NutritionView ledger={ledger} />}
+            {tab === 'history' && <HistoryView ledger={ledger} />}
+            {tab === 'progress' && <ProgressView ledger={ledger} />}
+          </div>
+        )}
       </main>
 
       <nav className="fixed bottom-0 left-0 right-0 brutal-card z-50" style={{
@@ -70,11 +108,11 @@ function App() {
       }}>
         <div className="max-w-lg mx-auto flex">
           {TABS.map(({ key, icon: Icon, label }) => {
-            const active = tab === key;
+            const active = tab === key && !showSettings;
             return (
               <button
                 key={key}
-                onClick={() => setTab(key)}
+                onClick={() => selectTab(key)}
                 className={`flex-1 flex flex-col items-center gap-0.5 py-2.5 min-h-[52px] transition-all duration-150 ${
                   active ? 'text-accent' : 'text-text-dim'
                 }`}

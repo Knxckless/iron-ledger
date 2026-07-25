@@ -1,32 +1,32 @@
 // Dashboard: Stats, Muskel-Heatmap + Balance, Körpermetriken, Aktivitäts-Grid,
 // Backup (Export/Import).
 
-import { useMemo, useState, useRef } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Flame, Calendar, ArrowRight, Zap, Trophy, Scale, Trash2,
-  ChevronDown, ChevronUp, Settings, Download, Upload, AlertTriangle,
+  ChevronDown, ChevronUp, Settings, AlertTriangle,
   Utensils, Plus, Check, X, ListChecks,
 } from 'lucide-react';
 import {
   LineChart, Line, YAxis, XAxis, ResponsiveContainer, Tooltip, ReferenceArea, ReferenceLine, Label,
 } from 'recharts';
 import { BodyHeatmap } from '../components/BodyHeatmap';
-import { RoutineSettings } from '../components/RoutineSettings';
 import { workoutLabel, DIET_PHASE_INFO } from '../data/model';
 import type { DietPhaseType } from '../data/model';
 import { CATEGORY_LABELS, CATEGORY_COLORS, MUSCLE_BY_ID } from '../data/muscles';
 import type { MuscleCategory } from '../data/muscles';
 import {
   computeMuscleStats, computeBalance, muscleLabel, round1,
-  weeklySetsPerMuscle, WEEKLY_SET_TARGET, dietPhaseProgress,
+  weeklySetsPerMuscle, WEEKLY_SET_TARGET, dietPhaseProgress, nextUpTemplateId,
 } from '../lib/stats';
-import { exportBackup, importBackup, resetAll, METRIC_INFO } from '../lib/storage';
+import { METRIC_INFO } from '../lib/storage';
 import type { MetricId } from '../lib/storage';
 import type { Ledger } from '../hooks/useLedger';
 
 interface Props {
   ledger: Ledger;
   onStartTraining: (templateId?: string) => void;
+  onOpenSettings: () => void;
 }
 
 function isoDate(d: Date) {
@@ -39,16 +39,12 @@ const MUSCLE_RANGES = [
   { label: '3 Monate', days: 90 },
 ];
 
-export function HomeView({ ledger, onStartTraining }: Props) {
-  const { workouts, templates, routines, settings, exercisesByName, metrics, addMetric, deleteMetric, reload,
+export function HomeView({ ledger, onStartTraining, onOpenSettings }: Props) {
+  const { workouts, templates, routines, settings, exercisesByName, metrics, addMetric, deleteMetric,
     dietPhases, addDietPhase, deleteDietPhase } = ledger;
 
   const [selectedWeek, setSelectedWeek] = useState<number | null>(null);
   const [muscleRange, setMuscleRange] = useState(28);
-  const [showSettings, setShowSettings] = useState(false);
-  const [importMsg, setImportMsg] = useState<string | null>(null);
-  const [resetStep, setResetStep] = useState(0);   // 0 = zu, 1 = 1. Warnung, 2 = letzte Warnung
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Körpermetriken
   const [metricId, setMetricId] = useState<MetricId>('weight');
@@ -90,26 +86,22 @@ export function HomeView({ ledger, onStartTraining }: Props) {
     return { total, thisWeek, lastWorkout, streak };
   }, [workouts]);
 
-  // "Heute dran": bei aktiver Routine das nächste Workout (nach dem zuletzt
-  // gemachten, in Routinen-Reihenfolge) + dessen letzte Übungen.
+  // Schon heute trainiert? → Label wechselt von "Heute dran" auf "Als Nächstes".
+  const trainedToday = useMemo(
+    () => workouts.some(w => w.date === isoDate(new Date())),
+    [workouts]
+  );
+
+  // "Heute dran" / "Als Nächstes": bei aktiver Routine das nächste Workout
+  // (nach dem zuletzt gemachten, in Reihenfolge) + dessen letzte Übungen.
   const nextUp = useMemo(() => {
     const routine = routines.find(r => r.id === settings.activeRoutineId);
-    if (!routine || routine.templateIds.length === 0) return null;
-    const tpls = routine.templateIds
-      .map(id => templates.find(t => t.id === id))
-      .filter((t): t is NonNullable<typeof t> => !!t);
-    if (tpls.length === 0) return null;
+    const nextId = nextUpTemplateId(routine, templates, workouts);
+    const next = nextId ? templates.find(t => t.id === nextId) : null;
+    if (!routine || !next) return null;
 
-    const belongs = (w: typeof workouts[number], tpl: typeof tpls[number]) =>
+    const belongs = (w: typeof workouts[number], tpl: typeof next) =>
       w.templateId === tpl.id || (!!tpl.preset && w.type === tpl.preset);
-
-    // jüngstes Training, das zu einem Routine-Workout gehört
-    let lastPos = -1, lastDate = '';
-    for (const w of workouts) {
-      const idx = tpls.findIndex(t => belongs(w, t));
-      if (idx >= 0 && w.date >= lastDate) { lastDate = w.date; lastPos = idx; }
-    }
-    const next = tpls[lastPos < 0 ? 0 : (lastPos + 1) % tpls.length];
 
     const sessions = workouts.filter(w => belongs(w, next)).sort((a, b) => b.date.localeCompare(a.date));
     const last = sessions[0];
@@ -228,42 +220,6 @@ export function HomeView({ ledger, onStartTraining }: Props) {
     setShowPhaseForm(false);
   };
 
-  const handleExport = () => {
-    const blob = new Blob([exportBackup()], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `iron-ledger-backup-${isoDate(new Date())}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleImportFile = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = importBackup(String(reader.result));
-      if (result.ok) {
-        reload();
-        setImportMsg('Backup importiert ✓');
-      } else {
-        setImportMsg(result.error || 'Import fehlgeschlagen');
-      }
-      setTimeout(() => setImportMsg(null), 4000);
-    };
-    reader.readAsText(file);
-  };
-
-  const handleReset = () => {
-    // Sicherheitsnetz: erst automatisch ein Backup herunterladen …
-    handleExport();
-    // … dann kurz warten (Download muss starten), löschen und neu laden.
-    setResetStep(0);
-    setTimeout(() => {
-      resetAll();
-      window.location.reload();
-    }, 900);
-  };
-
   const today = new Date().toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' });
   const info = METRIC_INFO[metricId];
 
@@ -276,91 +232,14 @@ export function HomeView({ ledger, onStartTraining }: Props) {
             <h1 className="text-3xl tracking-wider text-text font-display">IRON</h1>
             <h1 className="text-3xl tracking-wider text-text font-display -mt-1">LEDGER</h1>
           </div>
-          <button onClick={() => setShowSettings(!showSettings)}
-            className={`p-2 transition-colors ${showSettings ? 'text-accent' : 'text-text-muted hover:text-text'}`}
+          <button onClick={onOpenSettings}
+            className="p-2 transition-colors text-text-muted hover:text-text"
             aria-label="Einstellungen">
             <Settings className="w-6 h-6" />
           </button>
         </div>
         <p className="text-text-dim text-xs uppercase tracking-widest font-mono">{today}</p>
       </div>
-
-      {/* EINSTELLUNGEN */}
-      {showSettings && <RoutineSettings ledger={ledger} />}
-
-      {/* BACKUP-PANEL */}
-      {showSettings && (
-        <div className="brutal-card-sm p-3 mb-5 animate-slide-up">
-          <h3 className="text-xs font-bold text-text font-display tracking-wider uppercase mb-2">Backup</h3>
-          <p className="text-[10px] text-text-dim font-mono mb-3">
-            Alle Daten liegen nur lokal auf diesem Gerät. Regelmäßig exportieren!
-          </p>
-          <div className="flex gap-2">
-            <button onClick={handleExport} className="brutal-btn brutal-btn-accent flex-1 py-2.5 text-xs">
-              <Download className="w-3.5 h-3.5" /> Export JSON
-            </button>
-            <button onClick={() => fileInputRef.current?.click()}
-              className="brutal-btn brutal-btn-dark flex-1 py-2.5 text-xs">
-              <Upload className="w-3.5 h-3.5" /> Import
-            </button>
-            <input ref={fileInputRef} type="file" accept="application/json,.json" className="hidden"
-              onChange={e => { const f = e.target.files?.[0]; if (f) handleImportFile(f); e.target.value = ''; }} />
-          </div>
-          {importMsg && (
-            <p className="text-[10px] font-mono mt-2"
-              style={{ color: importMsg.includes('✓') ? 'var(--color-success)' : 'var(--color-danger)' }}>
-              {importMsg}
-            </p>
-          )}
-
-          {/* Werksreset — zwei Bestätigungen + automatischer Backup-Download */}
-          <div className="mt-4 pt-3 border-t" style={{ borderColor: 'var(--color-steel-light)' }}>
-            {resetStep === 0 && (
-              <button onClick={() => setResetStep(1)}
-                className="w-full py-2.5 flex items-center justify-center gap-2 text-[11px] font-display
-                  tracking-wider uppercase text-danger hover:text-red-300 transition-colors border border-danger">
-                <Trash2 className="w-3.5 h-3.5" /> Alle Daten zurücksetzen
-              </button>
-            )}
-
-            {resetStep === 1 && (
-              <div className="space-y-2 animate-fade-in">
-                <p className="text-[10px] text-text-dim font-mono">
-                  <span className="text-danger font-bold">Schritt 1 von 2.</span> Das löscht alle
-                  Workouts, Übungen, Maße, Diätphasen und Routinen. Vorher wird automatisch ein
-                  Backup heruntergeladen.
-                </p>
-                <div className="flex gap-2">
-                  <button onClick={() => setResetStep(2)}
-                    className="brutal-btn flex-1 py-2.5 text-xs"
-                    style={{ backgroundColor: 'var(--color-warning)', color: '#000' }}>Weiter</button>
-                  <button onClick={() => setResetStep(0)}
-                    className="brutal-btn brutal-btn-dark flex-1 py-2.5 text-xs">Abbrechen</button>
-                </div>
-              </div>
-            )}
-
-            {resetStep === 2 && (
-              <div className="space-y-2 animate-fade-in">
-                <p className="text-[10px] font-mono">
-                  <span className="text-danger font-bold">Schritt 2 von 2 — endgültig.</span>{' '}
-                  <span className="text-text-dim">Das kann nicht rückgängig gemacht werden. Beim
-                    Klick lädt zuerst dein Backup (JSON) herunter, danach werden alle Daten gelöscht.</span>
-                </p>
-                <div className="flex gap-2">
-                  <button onClick={handleReset}
-                    className="brutal-btn flex-1 py-2.5 text-xs"
-                    style={{ backgroundColor: 'var(--color-danger)', color: '#fff' }}>
-                    <Download className="w-3.5 h-3.5" /> Backup laden & löschen
-                  </button>
-                  <button onClick={() => setResetStep(0)}
-                    className="brutal-btn brutal-btn-dark flex-1 py-2.5 text-xs">Abbrechen</button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* HEUTE DRAN — nächstes Workout der aktiven Routine */}
       {nextUp && (
@@ -370,7 +249,9 @@ export function HomeView({ ledger, onStartTraining }: Props) {
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2 min-w-0">
               <ListChecks className="w-4 h-4 flex-shrink-0" style={{ color: nextUp.workout.color }} />
-              <span className="text-[10px] text-text-muted font-mono uppercase tracking-wider">Heute dran</span>
+              <span className="text-[10px] text-text-muted font-mono uppercase tracking-wider">
+                {trainedToday ? 'Als Nächstes' : 'Heute dran'}
+              </span>
               <span className="text-sm font-bold text-text font-display tracking-wider truncate">{nextUp.workout.name}</span>
             </div>
             <span className="flex items-center gap-1 text-[10px] font-display tracking-wider uppercase flex-shrink-0"

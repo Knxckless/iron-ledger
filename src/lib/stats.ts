@@ -1,6 +1,6 @@
 // Analytik-Kern: 1RM, Volumen, Muskel-Tracking, PRs, Trends
 
-import type { WorkoutEntry, ExerciseDef, SetEntry, DietPhase } from '../data/model';
+import type { WorkoutEntry, ExerciseDef, SetEntry, DietPhase, WorkoutTemplate } from '../data/model';
 import type { MuscleId, MuscleCategory } from '../data/muscles';
 import { MUSCLES, MUSCLE_BY_ID, ROLE_WEIGHT } from '../data/muscles';
 
@@ -481,6 +481,30 @@ export function strengthLevel(exerciseName: string, bestE1RM: number, bodyweight
     ratio: round1(ratio),
     nextRatio: idx < thresholds.length ? thresholds[idx] : null,
   };
+}
+
+// ===== Nächstes Routine-Workout ("Heute/Als Nächstes dran") =====
+
+// Wählt in einer Routine das Workout nach dem zuletzt trainierten (in Reihenfolge,
+// zyklisch). Gemeinsame Logik für Startseite und Training-Voreinstellung.
+export function nextUpTemplateId(
+  routine: { templateIds: string[] } | null | undefined,
+  templates: WorkoutTemplate[],
+  workouts: WorkoutEntry[],
+): string | null {
+  if (!routine || routine.templateIds.length === 0) return null;
+  const tpls = routine.templateIds
+    .map(id => templates.find(t => t.id === id))
+    .filter((t): t is WorkoutTemplate => !!t);
+  if (tpls.length === 0) return null;
+  const belongs = (w: WorkoutEntry, tpl: WorkoutTemplate) =>
+    w.templateId === tpl.id || (!!tpl.preset && w.type === tpl.preset);
+  let lastPos = -1, lastDate = '';
+  for (const w of workouts) {
+    const idx = tpls.findIndex(t => belongs(w, t));
+    if (idx >= 0 && w.date >= lastDate) { lastDate = w.date; lastPos = idx; }
+  }
+  return tpls[lastPos < 0 ? 0 : (lastPos + 1) % tpls.length].id;
 }
 
 // ===== Stagnations-Erkennung =====
