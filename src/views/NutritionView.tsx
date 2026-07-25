@@ -70,6 +70,22 @@ export function NutritionView({ ledger }: Props) {
   const tdee = tdeeAdaptive ?? tdeeFormula;
   const tdeeSource = tdeeAdaptive != null ? 'aus deinen Daten' : tdeeFormula != null ? 'Formel-Schätzung' : null;
 
+  // Abgleich Daten-Bedarf ↔ Formel-Erwartung: sagt, ob dein Tracking stimmt.
+  // Positiver gap = echter Verbrauch über der Formel (mehr verbraucht ODER
+  // mehr gegessen als getrackt); negativer gap = umgekehrt.
+  const reconcile = useMemo(() => {
+    if (tdeeAdaptive == null || tdeeFormula == null) return null;
+    const gap = tdeeAdaptive - tdeeFormula;
+    return { gap, data: tdeeAdaptive, formula: tdeeFormula };
+  }, [tdeeAdaptive, tdeeFormula]);
+
+  // Ø extra verbrannte kcal (Sport) der letzten 3 Wochen — nur Info
+  const burnedAvg = useMemo(() => {
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 21);
+    const recent = nutrition.filter(n => new Date(n.date) >= cutoff && (n.burned || 0) > 0);
+    return recent.length ? Math.round(recent.reduce((a, n) => a + (n.burned || 0), 0) / recent.length) : 0;
+  }, [nutrition]);
+
   // Zielkalorien je Phase
   const targetKcal = useMemo(() => {
     if (!tdee) return null;
@@ -196,6 +212,38 @@ export function NutritionView({ ledger }: Props) {
               <p className="text-[9px] text-text-muted font-mono mt-2">
                 Trag ein paar Tage Kalorien + Gewicht ein → dann wird der Bedarf aus deinen echten Daten berechnet (genauer als die Formel).
               </p>
+            )}
+
+            {/* ABGLEICH: echter Bedarf (aus Daten) vs. Formel-Erwartung */}
+            {tdeeAdaptive != null && (
+              <div className="brutal-card-inset p-2.5 mt-2"
+                style={{ borderLeft: `3px solid ${reconcile && Math.abs(reconcile.gap) > 100 ? 'var(--color-warning)' : 'var(--color-success)'}` }}>
+                <span className="section-label flex items-center gap-1.5 mb-1">
+                  <Scale className="w-3 h-3" /> Abgleich
+                </span>
+                <p className="text-[10px] text-text-dim font-mono leading-relaxed">
+                  Bedarf aus deinem Verlauf: <span className="text-text font-bold">{tdeeAdaptive} kcal</span>.
+                  {' '}So viel verbrauchst du wirklich (Zufuhr + Gewichtsentwicklung).
+                </p>
+                {reconcile ? (
+                  <p className="text-[10px] font-mono leading-relaxed mt-1"
+                    style={{ color: Math.abs(reconcile.gap) > 100 ? 'var(--color-warning)' : 'var(--color-success)' }}>
+                    {Math.abs(reconcile.gap) <= 100
+                      ? `Passt zur Formel (${reconcile.formula} kcal, Δ ${reconcile.gap > 0 ? '+' : ''}${reconcile.gap}) — dein Tracking wirkt stimmig.`
+                      : reconcile.gap > 0
+                        ? `${reconcile.gap} kcal über der Formel (${reconcile.formula}). Du verbrauchst mehr als gedacht — oder isst mehr, als du trackst.`
+                        : `${-reconcile.gap} kcal unter der Formel (${reconcile.formula}). Du verbrauchst weniger — oder trackst mehr, als du isst.`}
+                  </p>
+                ) : (
+                  <p className="text-[9px] text-text-muted font-mono mt-1">
+                    Fülle dein Profil (Zahnrad) aus → dann vergleiche ich den Daten-Bedarf mit der Formel und zeige dir, ob dein Tracking passt.
+                  </p>
+                )}
+                <p className="text-[9px] text-text-muted font-mono mt-1">
+                  Ziel & Bedarf oben nutzen bereits diesen echten Wert.
+                  {burnedAvg > 0 && <> · Ø Sport {burnedAvg} kcal/Tag (zählt ins Tages­budget, nicht doppelt in den Bedarf).</>}
+                </p>
+              </div>
             )}
           </>
         ) : (
