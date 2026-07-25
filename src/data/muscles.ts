@@ -2,6 +2,7 @@
 
 export type MuscleId =
   | 'chest'
+  | 'upper_chest'
   | 'upper_back'
   | 'lats'
   | 'lower_back'
@@ -39,6 +40,7 @@ export interface MuscleInfo {
 
 export const MUSCLES: MuscleInfo[] = [
   { id: 'chest', label: 'Brust', short: 'Brust', category: 'push' },
+  { id: 'upper_chest', label: 'Obere Brust', short: 'O. Brust', category: 'push' },
   { id: 'front_delts', label: 'Vordere Schulter', short: 'V. Schulter', category: 'push' },
   { id: 'side_delts', label: 'Seitliche Schulter', short: 'S. Schulter', category: 'push' },
   { id: 'triceps', label: 'Trizeps', short: 'Trizeps', category: 'push' },

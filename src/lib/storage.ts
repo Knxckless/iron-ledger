@@ -19,6 +19,7 @@ export const KEYS = {
   routines: 'iron-ledger-routines',
   settings: 'iron-ledger-settings',
   nutrition: 'iron-ledger-nutrition',
+  draft: 'iron-ledger-draft',                // laufendes (noch nicht gespeichertes) Training
 } as const;
 
 export function readJSON<T>(key: string): T | null {

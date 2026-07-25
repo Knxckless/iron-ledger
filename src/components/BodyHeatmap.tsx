@@ -19,7 +19,8 @@ interface Zone {
 const FRONT_ZONES: Zone[] = [
   { muscle: 'front_delts', paths: ['M31 26 L38 24 L38 32 L31 34 Z', 'M69 26 L62 24 L62 32 L69 34 Z'] },
   { muscle: 'side_delts', paths: ['M24 28 L31 26 L31 36 L24 38 Z', 'M76 28 L69 26 L69 36 L76 38 Z'] },
-  { muscle: 'chest', paths: ['M38 26 L62 26 L64 42 L50 48 L36 42 Z'] },
+  { muscle: 'upper_chest', paths: ['M38 26 L62 26 L63 34 L50 37 L37 34 Z'] },
+  { muscle: 'chest', paths: ['M37 34 L63 34 L64 42 L50 48 L36 42 Z'] },
   { muscle: 'biceps', paths: ['M25 40 L32 38 L32 52 L25 54 Z', 'M75 40 L68 38 L68 52 L75 54 Z'] },
   { muscle: 'forearms', paths: ['M23 57 L30 55 L28 71 L21 69 Z', 'M77 57 L70 55 L72 71 L79 69 Z'] },
   { muscle: 'abs', paths: ['M42 50 L58 50 L57 74 L50 78 L43 74 Z'] },

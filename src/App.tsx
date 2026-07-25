@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useLedger } from './hooks/useLedger';
 import { HomeView } from './views/HomeView';
 import { TodayView } from './views/TodayView';
@@ -27,6 +27,12 @@ function App() {
     setPendingTemplateId(templateId);
     setTab('today');
   }, []);
+
+  // "Heute dran"-Vorwahl nur einmal verbrauchen: verlässt man den Training-Tab,
+  // wird sie gelöscht, damit beim Zurückkommen der laufende Entwurf wiederkommt.
+  useEffect(() => {
+    if (tab !== 'today' && pendingTemplateId !== undefined) setPendingTemplateId(undefined);
+  }, [tab, pendingTemplateId]);
 
   if (!ledger.ready) {
     return (

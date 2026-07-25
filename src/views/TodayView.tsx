@@ -13,6 +13,16 @@ import type { MuscleId } from '../data/muscles';
 import { detectNewPRs, round1, suggestNextTarget } from '../lib/stats';
 import type { NewPR, TargetSuggestion } from '../lib/stats';
 import type { Ledger } from '../hooks/useLedger';
+import { readJSON, writeJSON, KEYS } from '../lib/storage';
+
+// Laufendes, noch nicht gespeichertes Training (übersteht Tab-Wechsel + App-Schließen)
+interface WorkoutDraft {
+  templateId: string;
+  session: ExerciseEntry[];
+  activeIdx: number | null;
+  doneIdx: number[];
+  savedAt: number;
+}
 
 interface Props {
   ledger: Ledger;
@@ -57,6 +67,8 @@ function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
   const audioRef = useRef<AudioContext | null>(null);
   const wakeRef = useRef<WakeLockSentinel | null>(null);
   const firedRef = useRef(false);
+  const scheduledRef = useRef<OscillatorNode[]>([]);   // vorgeplante Alarm-Töne
+  const keepAliveRef = useRef<{ osc: OscillatorNode; gain: GainNode } | null>(null);
 
   // Audio-Kontext auf Nutzergeste anlegen/entsperren (nötig fürs Piepen)
   const ensureAudio = () => {
@@ -68,21 +80,51 @@ function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
     return audioRef.current;
   };
 
-  // Drei kurze Pieptöne
-  const beep = () => {
+  // Keepalive: ein praktisch stummer Dauerton hält den Audio-Kontext auch im
+  // Hintergrund/bei gesperrtem Bildschirm aktiv, damit der vorgeplante Alarm feuert.
+  // Web-Audio mischt sich unter laufende Musik, statt sie zu pausieren.
+  const startKeepAlive = () => {
+    const ctx = audioRef.current;
+    if (!ctx || keepAliveRef.current) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 40;
+    gain.gain.value = 0.0004;   // unhörbar, aber != 0 → Hardware bleibt wach
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start();
+    keepAliveRef.current = { osc, gain };
+  };
+  const stopKeepAlive = () => {
+    try { keepAliveRef.current?.osc.stop(); keepAliveRef.current?.osc.disconnect(); } catch { /* ignore */ }
+    keepAliveRef.current = null;
+  };
+
+  // Lauten, durchdringenden Alarm exakt auf die Endzeit der Audio-Uhr einplanen.
+  // Feuert auch, wenn die JS-Timer im Hintergrund gedrosselt werden.
+  const cancelAlarm = () => {
+    scheduledRef.current.forEach(osc => { try { osc.stop(); osc.disconnect(); } catch { /* ignore */ } });
+    scheduledRef.current = [];
+  };
+  const scheduleAlarm = (atTime: number) => {
     const ctx = audioRef.current;
     if (!ctx) return;
-    const t0 = ctx.currentTime;
-    [0, 0.28, 0.56].forEach((t, i) => {
+    cancelAlarm();
+    const pattern = [0, 0.34, 0.68, 1.02, 1.44];   // 5 Beeps, letzter höher/länger
+    pattern.forEach((t, i) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'square';
-      osc.frequency.value = i === 2 ? 1320 : 880;
-      gain.gain.setValueAtTime(0.0001, t0 + t);
-      gain.gain.exponentialRampToValueAtTime(0.5, t0 + t + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + t + 0.22);
+      osc.frequency.value = i === pattern.length - 1 ? 1560 : 1040;
+      const st = atTime + t;
+      const len = i === pattern.length - 1 ? 0.5 : 0.26;
+      gain.gain.setValueAtTime(0.0001, st);
+      gain.gain.exponentialRampToValueAtTime(1.0, st + 0.015);   // laut
+      gain.gain.setValueAtTime(1.0, st + len - 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.0001, st + len);
       osc.connect(gain); gain.connect(ctx.destination);
-      osc.start(t0 + t); osc.stop(t0 + t + 0.24);
+      osc.start(st); osc.stop(st + len + 0.02);
+      scheduledRef.current.push(osc);
     });
   };
 
@@ -116,9 +158,11 @@ function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
       if (left === 0 && !firedRef.current) {
         firedRef.current = true;
         setRunning(false);
+        // Ton kommt aus dem vorgeplanten Alarm (feuert auch im Hintergrund);
+        // Vibration + Notification sind ergänzende Best-Effort-Signale.
         navigator.vibrate?.([300, 120, 300, 120, 500]);
-        beep();
         notify();
+        stopKeepAlive();
         releaseWake();
       }
     }, 250);
@@ -132,12 +176,23 @@ function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
     return () => document.removeEventListener('visibilitychange', onVis);
   }, [running]);
 
-  useEffect(() => () => releaseWake(), []);
+  // Audio bei der ersten Nutzergeste im Training entsperren, damit der
+  // Auto-Start (nach ausgefülltem Satz) sofort einen laufenden Kontext hat.
+  useEffect(() => {
+    const unlock = () => ensureAudio();
+    document.addEventListener('pointerdown', unlock);
+    return () => document.removeEventListener('pointerdown', unlock);
+  }, []);
+
+  // Aufräumen beim Verlassen (Tab-Wechsel): Alarm + Keepalive + Wake Lock lösen
+  useEffect(() => () => { cancelAlarm(); stopKeepAlive(); releaseWake(); }, []);
 
   const start = (secs: number) => {
-    ensureAudio();
+    const ctx = ensureAudio();
     if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
     void acquireWake();
+    startKeepAlive();
+    if (ctx) scheduleAlarm(ctx.currentTime + secs);
     setDuration(secs);
     setRemaining(secs);
     endRef.current = Date.now() + secs * 1000;
@@ -145,8 +200,10 @@ function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
   };
 
   const resume = () => {
-    ensureAudio();
+    const ctx = ensureAudio();
     void acquireWake();
+    startKeepAlive();
+    if (ctx) scheduleAlarm(ctx.currentTime + remaining);
     endRef.current = Date.now() + remaining * 1000;
     setRunning(true);
   };
@@ -191,7 +248,7 @@ function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
             </button>
           ))}
         </div>
-        <button onClick={() => { setRunning(false); setRemaining(duration); releaseWake(); setVisible(false); }}
+        <button onClick={() => { setRunning(false); setRemaining(duration); cancelAlarm(); stopKeepAlive(); releaseWake(); setVisible(false); }}
           className="text-text-muted hover:text-danger p-1"><X className="w-4 h-4" /></button>
       </div>
       <div className="flex items-center gap-3">
@@ -208,14 +265,14 @@ function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
         </div>
         <div className="flex gap-1">
           {running ? (
-            <button onClick={() => { setRunning(false); releaseWake(); }} className="brutal-chip px-2.5 py-1.5">
+            <button onClick={() => { setRunning(false); cancelAlarm(); stopKeepAlive(); releaseWake(); }} className="brutal-chip px-2.5 py-1.5">
               <Pause className="w-3.5 h-3.5" /></button>
           ) : (
             <button onClick={() => remaining > 0 && remaining < duration ? resume() : start(duration)}
               className="brutal-chip px-2.5 py-1.5 active">
               <Play className="w-3.5 h-3.5" /></button>
           )}
-          <button onClick={() => { setRunning(false); setRemaining(duration); releaseWake(); }}
+          <button onClick={() => { setRunning(false); setRemaining(duration); cancelAlarm(); stopKeepAlive(); releaseWake(); }}
             className="brutal-chip px-2.5 py-1.5"><RotateCcw className="w-3.5 h-3.5" /></button>
         </div>
       </div>
@@ -286,6 +343,8 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
   const restDefault = settings.restDefaultSec ?? 180;
   const autoStartRest = settings.timerAutoStart ?? true;
   const [restSignal, setRestSignal] = useState(0);
+  // Sätze, die den Auto-Start schon ausgelöst haben (verhindert Mehrfachstart)
+  const startedSetsRef = useRef<Set<string>>(new Set());
 
   // Aktive Routine: nur deren Workouts (in Routinen-Reihenfolge) zeigen.
   // Ohne aktive Routine (oder wenn leer/verwaist) → alle Workouts.
@@ -352,18 +411,45 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
     setEdits({});
     setActiveIdx(null);
     setDoneIdx(new Set());
+    startedSetsRef.current = new Set();
     setSaved(false);
     setShowAddExercise(false);
   }, [workouts]);
 
-  // Erste Initialisierung, sobald Templates geladen sind
+  // Erste Initialisierung, sobald Templates geladen sind:
+  // "Heute dran" > laufender Entwurf > Standard (letzte Session).
   useEffect(() => {
-    if (!initialized && template) {
-      loadTemplate(template);
-      setTemplateId(template.id);
+    if (initialized || !template) return;
+    // 1) Explizit über "Heute dran" gestartet → dieses Template frisch laden
+    if (initialTemplateId && templates.some(t => t.id === initialTemplateId)) {
+      const tpl = templates.find(t => t.id === initialTemplateId)!;
+      setTemplateId(initialTemplateId);
+      loadTemplate(tpl);
       setInitialized(true);
+      return;
     }
-  }, [initialized, template, loadTemplate]);
+    // 2) Laufender Entwurf mit echten Daten → wiederherstellen
+    const draft = readJSON<WorkoutDraft>(KEYS.draft);
+    const draftTpl = draft && templates.find(t => t.id === draft.templateId);
+    const draftHasData = !!draft?.session?.some(ex => ex.sets.some(s => s.weight > 0 && s.reps > 0));
+    if (draft && draftTpl && draftHasData) {
+      setTemplateId(draft.templateId);
+      setSession(draft.session);
+      setActiveIdx(draft.activeIdx ?? null);
+      setDoneIdx(new Set(draft.doneIdx ?? []));
+      const started = new Set<string>();
+      draft.session.forEach(ex => ex.sets.forEach((s, i) => {
+        if (s.weight > 0 && s.reps > 0) started.add(`${ex.name}#${i}`);
+      }));
+      startedSetsRef.current = started;
+      setInitialized(true);
+      return;
+    }
+    // 3) Standard
+    loadTemplate(template);
+    setTemplateId(template.id);
+    setInitialized(true);
+  }, [initialized, template, templates, initialTemplateId, loadTemplate]);
 
   // Routinenwechsel: fällt das gewählte Workout aus der Auswahl, aufs erste springen
   useEffect(() => {
@@ -379,14 +465,19 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
     loadTemplate(templates.find(t => t.id === id));
   };
 
-  // "Heute dran" auf Start hat ein Workout vorgewählt → hier übernehmen
+  // Laufendes Training als Entwurf sichern (nur wenn echte Daten vorhanden).
+  // So bleibt es beim Tab-Wechsel erhalten und übersteht das Schließen der App.
   useEffect(() => {
-    if (initialTemplateId && templates.some(t => t.id === initialTemplateId)) {
-      setTemplateId(initialTemplateId);
-      loadTemplate(templates.find(t => t.id === initialTemplateId));
+    if (!initialized) return;
+    const hasAny = session.some(ex => ex.sets.some(s => s.weight > 0 && s.reps > 0));
+    if (hasAny) {
+      writeJSON(KEYS.draft, {
+        templateId, session, activeIdx, doneIdx: [...doneIdx], savedAt: Date.now(),
+      } satisfies WorkoutDraft);
+    } else {
+      localStorage.removeItem(KEYS.draft);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialTemplateId]);
+  }, [session, activeIdx, doneIdx, templateId, initialized]);
 
   // Muskeln, die die heutige Session trifft (aus der Bibliothek abgeleitet)
   const sessionMuscles = useMemo(() => {
@@ -499,6 +590,16 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
   };
   const blurNumField = (exIdx: number, setIdx: number, field: string) => {
     setEdits(prev => { const n = { ...prev }; delete n[editKey(exIdx, setIdx, field)]; return n; });
+    // Auto-Start: sobald ein Satz vollständig ist (Gewicht + Wdh.), Pause starten —
+    // je Satz nur einmal, damit Nachbearbeiten nicht erneut auslöst.
+    const set = session[exIdx]?.sets[setIdx];
+    if (set && set.weight > 0 && set.reps > 0) {
+      const key = `${session[exIdx].name}#${setIdx}`;
+      if (!startedSetsRef.current.has(key)) {
+        startedSetsRef.current.add(key);
+        setRestSignal(s => s + 1);
+      }
+    }
   };
   const numFieldValue = (exIdx: number, setIdx: number, field: 'weight' | 'reps' | 'rir', stored: number | undefined) => {
     const k = editKey(exIdx, setIdx, field);
@@ -518,8 +619,6 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
       };
       return updated;
     });
-    // Neuer Satz = vorheriger ist erledigt → Pause auto-starten
-    setRestSignal(s => s + 1);
   };
 
   const removeSet = (exIdx: number, setIdx: number) => {
@@ -587,8 +686,15 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
     };
     const prs = detectNewPRs(entry, workouts);
     addWorkout(entry);
+    localStorage.removeItem(KEYS.draft);
     setSaved(true);
     if (prs.length > 0) setNewPRs(prs);
+    // Editor für die nächste Session frisch machen (Entwurf ist erledigt)
+    setSession(prev => prev.map(ex => ({ name: ex.name, sets: emptySets() })));
+    setActiveIdx(null);
+    setDoneIdx(new Set());
+    setEdits({});
+    startedSetsRef.current = new Set();
     setTimeout(() => setSaved(false), 2500);
   };
 
@@ -832,19 +938,19 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
                     value={numFieldValue(exIdx, setIdx, 'weight', set.weight)}
                     onChange={e => setNumField(exIdx, setIdx, 'weight', e.target.value)}
                     onBlur={() => blurNumField(exIdx, setIdx, 'weight')}
-                    className="brutal-input w-16 px-2 py-2.5 text-sm text-center font-mono" />
+                    className="brutal-input w-[68px] px-1 py-2.5 text-xs text-center font-mono" />
                   <span className="text-text-muted text-[10px] uppercase font-mono">kg</span>
                   <input type="text" inputMode="decimal"
                     placeholder={target ? fmtNum(target.reps) : '0'}
                     value={numFieldValue(exIdx, setIdx, 'reps', set.reps)}
                     onChange={e => setNumField(exIdx, setIdx, 'reps', e.target.value)}
                     onBlur={() => blurNumField(exIdx, setIdx, 'reps')}
-                    className="brutal-input w-14 px-2 py-2.5 text-sm text-center font-mono" />
+                    className="brutal-input w-12 px-1 py-2.5 text-xs text-center font-mono" />
                   <input type="text" inputMode="decimal" placeholder="RIR"
                     value={numFieldValue(exIdx, setIdx, 'rir', set.rir)}
                     onChange={e => setNumField(exIdx, setIdx, 'rir', e.target.value)}
                     onBlur={() => blurNumField(exIdx, setIdx, 'rir')}
-                    className="brutal-input w-12 px-1.5 py-2.5 text-sm text-center font-mono"
+                    className="brutal-input w-10 px-0.5 py-2.5 text-xs text-center font-mono"
                     style={{ color: 'var(--color-warning)' }}
                     title="Reps in Reserve (optional)" />
                   <input type="text" placeholder="Notiz"
