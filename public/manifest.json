@@ -1,6 +1,6 @@
 {
-  "name": "Iron Ledger",
-  "short_name": "IronLedger",
+  "name": "caelifts",
+  "short_name": "caelifts",
   "description": "Brutalist gym tracker. Log your iron.",
   "start_url": "./",
   "scope": "./",

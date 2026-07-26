@@ -229,8 +229,7 @@ export function HomeView({ ledger, onStartTraining, onOpenSettings }: Props) {
       <div className="mb-5 animate-fade-in">
         <div className="flex items-center justify-between mb-1">
           <div>
-            <h1 className="text-3xl tracking-wider text-text font-display">IRON</h1>
-            <h1 className="text-3xl tracking-wider text-text font-display -mt-1">LEDGER</h1>
+            <h1 className="text-4xl tracking-wider text-text font-display leading-none">caelifts</h1>
           </div>
           <button onClick={onOpenSettings}
             className="p-2 transition-colors text-text-muted hover:text-text"
