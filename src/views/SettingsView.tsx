@@ -2,7 +2,7 @@
 // Übungen & Workouts (Bibliothek), Routinen, Backup/Import und Werksreset.
 
 import { useState, useRef } from 'react';
-import { ArrowLeft, Download, Upload, Trash2, BookOpen, ListChecks, Database } from 'lucide-react';
+import { ArrowLeft, Download, Upload, Trash2, BookOpen, ListChecks, Database, Target } from 'lucide-react';
 import { RoutineSettings } from '../components/RoutineSettings';
 import { LibraryView } from './LibraryView';
 import { exportBackup, importBackup, resetAll } from '../lib/storage';
@@ -16,7 +16,8 @@ interface Props {
 function isoDate(d: Date) { return d.toISOString().split('T')[0]; }
 
 export function SettingsView({ ledger, onClose }: Props) {
-  const { reload } = ledger;
+  const { reload, settings, updateSettings } = ledger;
+  const showTarget = settings.showTarget !== false;
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [resetStep, setResetStep] = useState(0);   // 0 = zu, 1 = 1. Warnung, 2 = letzte Warnung
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -63,6 +64,30 @@ export function SettingsView({ ledger, onClose }: Props) {
       </div>
 
       <div className="px-4 pt-4 space-y-6">
+        {/* TRAINING */}
+        <section>
+          <div className="flex items-center gap-2 mb-2">
+            <Target className="w-4 h-4 text-accent" />
+            <h2 className="section-label !text-sm">Training</h2>
+          </div>
+          <div className="brutal-card-sm p-3">
+            <button onClick={() => updateSettings({ showTarget: !showTarget })}
+              className="w-full flex items-center justify-between">
+              <div className="text-left">
+                <span className="block text-xs font-bold text-text font-display tracking-wider uppercase">Zielvorschlag</span>
+                <span className="block text-[10px] text-text-dim font-mono mt-0.5">
+                  Empfohlenes Gewicht × Wdh. pro Übung im Training anzeigen
+                </span>
+              </div>
+              <span className="w-10 h-5 border-2 border-black flex items-center px-0.5 flex-shrink-0 transition-all"
+                style={{ backgroundColor: showTarget ? 'var(--color-accent)' : 'var(--color-concrete)',
+                  justifyContent: showTarget ? 'flex-end' : 'flex-start' }}>
+                <span className="w-3.5 h-3.5 bg-black block" />
+              </span>
+            </button>
+          </div>
+        </section>
+
         {/* ROUTINEN */}
         <section>
           <div className="flex items-center gap-2 mb-2">

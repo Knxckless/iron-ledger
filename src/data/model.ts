@@ -107,6 +107,8 @@ export interface Settings {
   // Pausentimer
   timerAutoStart?: boolean;   // nach jedem Satz automatisch starten (Default an)
   restDefaultSec?: number;    // Standard-Pausenlänge (Default 180 s)
+  // Training-Anzeige
+  showTarget?: boolean;       // Zielvorschlag anzeigen (Default an)
   // Profil für Kalorienbedarf-Schätzung (Mifflin-St Jeor)
   heightCm?: number;
   age?: number;
