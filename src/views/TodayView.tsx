@@ -345,6 +345,15 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
   const [restSignal, setRestSignal] = useState(0);
   // Sätze, die den Auto-Start schon ausgelöst haben (verhindert Mehrfachstart)
   const startedSetsRef = useRef<Set<string>>(new Set());
+  // Tatsächlich trainierte Reihenfolge (Übungsnamen in Aktivierungs-/Erledigt-
+  // Reihenfolge). Wird beim Speichern zum Sortieren genutzt, damit die nächste
+  // Session die reale Reihenfolge dieses Trainings zeigt.
+  const engagedRef = useRef<string[]>([]);
+  const engage = (name: string) => { if (!engagedRef.current.includes(name)) engagedRef.current.push(name); };
+
+  // Info-Block (Muskeln + Letzte Session) einklappbar; Training-Abbrechen-Bestätigung
+  const [showOverview, setShowOverview] = useState(true);
+  const [cancelStep, setCancelStep] = useState(0);
 
   // Zielvorschlag anzeigen? (in Einstellungen abschaltbar, Default an)
   const showTarget = settings.showTarget !== false;
@@ -381,13 +390,18 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
   const [activeIdx, setActiveIdx] = useState<number | null>(null);
   const [doneIdx, setDoneIdx] = useState<Set<number>>(new Set());
 
-  // Übung aktivieren → nach oben holen; Vorschau einklappen, damit sie oben sitzt
+  // Übung aktivieren → nach oben holen; Info-Block einklappen, damit sie oben sitzt
   const activate = (exIdx: number) => {
     setActiveIdx(exIdx);
     setShowPreview(false);
+    setShowOverview(false);
+    const name = session[exIdx]?.name;
+    if (name) engage(name);
   };
 
   const markDone = (exIdx: number) => {
+    const name = session[exIdx]?.name;
+    if (name) engage(name);
     setDoneIdx(prev => {
       const next = new Set(prev);
       next.add(exIdx);
@@ -436,6 +450,9 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
     setActiveIdx(null);
     setDoneIdx(new Set());
     startedSetsRef.current = new Set();
+    engagedRef.current = [];
+    setShowOverview(true);
+    setCancelStep(0);
     setSaved(false);
     setShowAddExercise(false);
   }, [workouts, emptyLikeLast]);
@@ -480,6 +497,11 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
         if (s.weight > 0 && s.reps > 0) started.add(`${ex.name}#${i}`);
       }));
       startedSetsRef.current = started;
+      // trainierte Reihenfolge aus dem Entwurf übernehmen (Reihenfolge = Draft-Reihenfolge)
+      engagedRef.current = draft.session
+        .filter(ex => ex.sets.some(s => s.weight > 0 && s.reps > 0))
+        .map(ex => ex.name);
+      if (draft.activeIdx != null) setShowOverview(false);
       setInitialized(true);
       return;
     }
@@ -608,6 +630,7 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
     })));
     setActiveIdx(null);
     setDoneIdx(new Set());
+    engagedRef.current = lastOfTemplate.exercises.map(ex => ex.name);
     setSaved(false);
   };
 
@@ -722,12 +745,20 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
       .filter(ex => ex.sets.length > 0);
     if (validExercises.length === 0) return;
 
+    // In der tatsächlich trainierten Reihenfolge speichern (Aktivierungs-/Erledigt-
+    // Reihenfolge). Übungen ohne erfasste Reihenfolge behalten ihre Position hinten.
+    const order = engagedRef.current;
+    const orderedExercises = validExercises
+      .map((ex, i) => ({ ex, o: order.indexOf(ex.name), i }))
+      .sort((a, b) => (a.o < 0 ? 1e9 : a.o) - (b.o < 0 ? 1e9 : b.o) || a.i - b.i)
+      .map(d => d.ex);
+
     const entry: Omit<WorkoutEntry, 'id'> = {
       date: new Date().toISOString().split('T')[0],
       type: template.preset ?? 'custom',
       label: template.name,
       templateId: template.id,
-      exercises: validExercises,
+      exercises: orderedExercises,
     };
     const prs = detectNewPRs(entry, workouts);
     addWorkout(entry);
@@ -740,6 +771,8 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
     setDoneIdx(new Set());
     setEdits({});
     startedSetsRef.current = new Set();
+    engagedRef.current = [];
+    setShowOverview(true);
     setTimeout(() => setSaved(false), 2500);
   };
 
@@ -789,6 +822,33 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
         ))}
       </div>
 
+      {/* Steuerzeile: Info-Block ein-/ausklappen + Training abbrechen (nur wenn nichts offen) */}
+      <div className="flex items-center justify-between gap-2 mb-2 min-h-[20px]">
+        {(sessionMuscles.primary.length > 0 || sessionMuscles.secondary.length > 0 || (templatePreview && templatePreview.length > 0)) ? (
+          <button onClick={() => setShowOverview(v => !v)}
+            className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-text-muted hover:text-text transition-colors">
+            {showOverview ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />} Übersicht
+          </button>
+        ) : <span />}
+        {hasData && (activeIdx === null || showOverview) && (
+          cancelStep === 0 ? (
+            <button onClick={() => setCancelStep(1)}
+              className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-danger hover:text-red-300 transition-colors">
+              <X className="w-3 h-3" /> Training abbrechen
+            </button>
+          ) : (
+            <span className="flex items-center gap-1.5">
+              <span className="text-[10px] font-mono text-text-dim">Verwerfen?</span>
+              <button onClick={() => { loadTemplate(template); setCancelStep(0); }}
+                className="brutal-chip px-2 py-0.5 text-[10px]"
+                style={{ backgroundColor: 'var(--color-danger)', color: '#fff', borderColor: '#000' }}>Ja</button>
+              <button onClick={() => setCancelStep(0)} className="brutal-chip px-2 py-0.5 text-[10px]">Nein</button>
+            </span>
+          )
+        )}
+      </div>
+
+      {showOverview && (<>
       {/* Muskel-Vorschau der Session */}
       {(sessionMuscles.primary.length > 0 || sessionMuscles.secondary.length > 0) && (
         <div className="flex flex-wrap items-center gap-1 mb-3 animate-fade-in">
@@ -843,6 +903,7 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
           )}
         </div>
       )}
+      </>)}
 
       {lastOfTemplate && !hasData && (
         <button onClick={duplicateLast}

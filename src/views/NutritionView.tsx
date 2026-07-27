@@ -44,6 +44,11 @@ export function NutritionView({ ledger }: Props) {
     [metrics]
   );
   const bodyweight = weightPoints.length ? weightPoints[weightPoints.length - 1].value : null;
+  // Heutiges Gewicht (falls schon eingetragen) — ein Eintrag pro Tag, überschreibt
+  const todaysWeight = useMemo(
+    () => metrics.find(m => m.metric === 'weight' && m.date === today)?.value ?? null,
+    [metrics, today]
+  );
 
   // Chart: roh + gleitender 7-Tage-Schnitt
   const chart = useMemo(() => {
@@ -146,6 +151,11 @@ export function NutritionView({ ledger }: Props) {
             disabled={!wVal.trim()}
             className="brutal-btn brutal-btn-accent px-3 py-2 text-xs">OK</button>
         </div>
+        <p className="text-[9px] text-text-muted font-mono -mt-2 mb-3">
+          {todaysWeight != null
+            ? <>heute: <span className="text-text font-bold">{fmtNum(todaysWeight)} kg</span> ✓ · neuer Wert überschreibt</>
+            : <>1 Eintrag pro Tag — ein neuer Wert am selben Tag überschreibt den alten</>}
+        </p>
 
         {chart.length >= 2 ? (
           <div className="brutal-card-inset p-2" style={{ width: '100%', height: 140 }}>
