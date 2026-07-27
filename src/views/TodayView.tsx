@@ -453,20 +453,6 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.map(e => e.name).join('|'), lastSetsFor]);
 
-  // Feld antippen → letzte Werte dieses Satzes übernehmen (falls Satz leer).
-  const fillFromPrefill = (exIdx: number, setIdx: number, name: string) => {
-    const pf = prefill[prefillKey(name, setIdx)];
-    if (!pf || pf.w <= 0) return;
-    setSession(prev => {
-      const set = prev[exIdx]?.sets[setIdx];
-      if (!set || set.weight > 0 || set.reps > 0) return prev;   // nur leere Sätze füllen
-      const updated = [...prev];
-      const sets = [...updated[exIdx].sets];
-      sets[setIdx] = { ...sets[setIdx], weight: pf.w, reps: pf.r };
-      updated[exIdx] = { ...updated[exIdx], sets };
-      return updated;
-    });
-  };
 
   // Erste Initialisierung, sobald Templates geladen sind:
   // "Heute dran" > laufender Entwurf > Standard (letzte Session).
@@ -953,7 +939,7 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
             {/* Legende: graue Platzhalter = letzte Session (nur Vorschlag) */}
             {Object.keys(prefill).some(k => k.startsWith(`${ex.name}#`)) && (
               <p className="text-[9px] font-mono mt-2 mb-1 text-text-muted">
-                grau = letzte Session (Vorschlag) · Feld antippen übernimmt sie
+                grau = letztes Mal in diesem Satz (nur Info)
               </p>
             )}
 
@@ -998,7 +984,6 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
                   <input type="text" inputMode="decimal"
                     placeholder={wPlaceholder}
                     value={numFieldValue(exIdx, setIdx, 'weight', set.weight)}
-                    onFocus={() => fillFromPrefill(exIdx, setIdx, ex.name)}
                     onChange={e => setNumField(exIdx, setIdx, 'weight', e.target.value)}
                     onBlur={() => blurNumField(exIdx, setIdx, 'weight')}
                     className={`${numCls} w-[68px]`} />
@@ -1006,7 +991,6 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
                   <input type="text" inputMode="decimal"
                     placeholder={rPlaceholder}
                     value={numFieldValue(exIdx, setIdx, 'reps', set.reps)}
-                    onFocus={() => fillFromPrefill(exIdx, setIdx, ex.name)}
                     onChange={e => setNumField(exIdx, setIdx, 'reps', e.target.value)}
                     onBlur={() => blurNumField(exIdx, setIdx, 'reps')}
                     className={`${numCls} w-12`} />
