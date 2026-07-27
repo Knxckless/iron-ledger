@@ -21,7 +21,6 @@ interface WorkoutDraft {
   session: ExerciseEntry[];
   activeIdx: number | null;
   doneIdx: number[];
-  confirmed: string[];   // bestätigte Sätze (bleiben hell nach Wiederherstellen)
   savedAt: number;
 }
 
@@ -350,13 +349,7 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
   // Zielvorschlag anzeigen? (in Einstellungen abschaltbar, Default an)
   const showTarget = settings.showTarget !== false;
 
-  // Bestätigte Sätze: Vorbelegung aus der letzten Session wird grau (Ghost)
-  // dargestellt; sobald der Nutzer ein Feld antippt, gilt der Satz als
-  // "eingetragen" und wird hell. Schlüssel: `${name}#${setIdx}`.
-  const [confirmed, setConfirmed] = useState<Set<string>>(new Set());
-  const confirmKey = (name: string, setIdx: number) => `${name}#${setIdx}`;
-  const markConfirmed = (name: string, setIdx: number) =>
-    setConfirmed(prev => (prev.has(confirmKey(name, setIdx)) ? prev : new Set(prev).add(confirmKey(name, setIdx))));
+  const prefillKey = (name: string, setIdx: number) => `${name}#${setIdx}`;
 
   // Aktive Routine: nur deren Workouts (in Routinen-Reihenfolge) zeigen.
   // Ohne aktive Routine (oder wenn leer/verwaist) → alle Workouts.
@@ -409,21 +402,27 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
     setActiveIdx(exIdx);
   };
 
-  // Sätze der letzten Session einer Übung (echte Werte, Notizen/RIR geleert).
-  // Damit werden Kästchen mit gleicher Satzzahl + Gewicht × Wdh. vorbelegt.
-  const lastSetsFor = useCallback((name: string): ExerciseEntry['sets'] => {
+  // Sätze der letzten Session einer Übung (echte Werte) — nur als Referenz für
+  // die Platzhalter. Werden NICHT als Eingabe übernommen (nur Info bis Antippen).
+  const lastSetsFor = useCallback((name: string): { weight: number; reps: number }[] => {
     const hist = workouts
       .filter(w => w.exercises.some(e => e.name === name))
       .sort((a, b) => b.date.localeCompare(a.date));
     for (const w of hist) {
       const valid = w.exercises.find(e => e.name === name)!.sets.filter(s => s.weight > 0 && s.reps > 0);
-      if (valid.length) return valid.map(s => ({ weight: s.weight, reps: s.reps, notes: '' }));
+      if (valid.length) return valid.map(s => ({ weight: s.weight, reps: s.reps }));
     }
-    return emptySets();
+    return [];
   }, [workouts]);
 
-  // Standard-Belegung = Übungen der letzten Session dieses Workouts, mit den
-  // echten letzten Werten vorbelegt (grau/Ghost, bis der Nutzer sie bestätigt).
+  // Leere Sätze in gleicher Anzahl wie die letzte Session (min. 1).
+  const emptyLikeLast = useCallback((name: string): ExerciseEntry['sets'] => {
+    const n = Math.max(lastSetsFor(name).length, 1);
+    return Array.from({ length: n }, () => ({ weight: 0, reps: 0, notes: '' }));
+  }, [lastSetsFor]);
+
+  // Standard-Belegung = Übungen der letzten Session, mit gleicher Satzzahl, aber
+  // LEEREN Feldern. Die letzten Werte erscheinen nur als grauer Platzhalter.
   const loadTemplate = useCallback((tpl: WorkoutTemplate | undefined) => {
     let names: string[] = [];
     if (tpl) {
@@ -432,15 +431,42 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
         .sort((a, b) => b.date.localeCompare(a.date));
       names = sessions.length ? sessions[0].exercises.map(e => e.name) : tpl.exerciseNames;
     }
-    setSession(names.map(name => ({ name, sets: lastSetsFor(name) })));
+    setSession(names.map(name => ({ name, sets: emptyLikeLast(name) })));
     setEdits({});
     setActiveIdx(null);
     setDoneIdx(new Set());
-    setConfirmed(new Set());
     startedSetsRef.current = new Set();
     setSaved(false);
     setShowAddExercise(false);
-  }, [workouts, lastSetsFor]);
+  }, [workouts, emptyLikeLast]);
+
+  // Platzhalter-Referenz je Satz (letzte Session), abgeleitet aus der Session.
+  const prefill = useMemo(() => {
+    const pf: Record<string, { w: number; r: number }> = {};
+    const seen = new Set<string>();
+    for (const ex of session) {
+      if (seen.has(ex.name)) continue;
+      seen.add(ex.name);
+      lastSetsFor(ex.name).forEach((s, i) => { pf[prefillKey(ex.name, i)] = { w: s.weight, r: s.reps }; });
+    }
+    return pf;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.map(e => e.name).join('|'), lastSetsFor]);
+
+  // Feld antippen → letzte Werte dieses Satzes übernehmen (falls Satz leer).
+  const fillFromPrefill = (exIdx: number, setIdx: number, name: string) => {
+    const pf = prefill[prefillKey(name, setIdx)];
+    if (!pf || pf.w <= 0) return;
+    setSession(prev => {
+      const set = prev[exIdx]?.sets[setIdx];
+      if (!set || set.weight > 0 || set.reps > 0) return prev;   // nur leere Sätze füllen
+      const updated = [...prev];
+      const sets = [...updated[exIdx].sets];
+      sets[setIdx] = { ...sets[setIdx], weight: pf.w, reps: pf.r };
+      updated[exIdx] = { ...updated[exIdx], sets };
+      return updated;
+    });
+  };
 
   // Erste Initialisierung, sobald Templates geladen sind:
   // "Heute dran" > laufender Entwurf > Standard (letzte Session).
@@ -463,9 +489,11 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
       setSession(draft.session);
       setActiveIdx(draft.activeIdx ?? null);
       setDoneIdx(new Set(draft.doneIdx ?? []));
-      const conf = new Set<string>(draft.confirmed ?? []);
-      startedSetsRef.current = new Set(conf);   // bestätigte Sätze nicht erneut auto-starten
-      setConfirmed(conf);   // bestätigte hell, unberührte Vorbelegung bleibt grau
+      const started = new Set<string>();
+      draft.session.forEach(ex => ex.sets.forEach((s, i) => {
+        if (s.weight > 0 && s.reps > 0) started.add(`${ex.name}#${i}`);
+      }));
+      startedSetsRef.current = started;
       setInitialized(true);
       return;
     }
@@ -500,16 +528,15 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
   // Zurückkommen grau bleibt. Übersteht Tab-Wechsel + App-Schließen.
   useEffect(() => {
     if (!initialized) return;
-    const started = confirmed.size > 0 || doneIdx.size > 0;
+    const started = session.some(ex => ex.sets.some(s => s.weight > 0 && s.reps > 0)) || doneIdx.size > 0;
     if (started) {
       writeJSON(KEYS.draft, {
-        templateId, session, activeIdx, doneIdx: [...doneIdx],
-        confirmed: [...confirmed], savedAt: Date.now(),
+        templateId, session, activeIdx, doneIdx: [...doneIdx], savedAt: Date.now(),
       } satisfies WorkoutDraft);
     } else {
       localStorage.removeItem(KEYS.draft);
     }
-  }, [session, activeIdx, doneIdx, confirmed, templateId, initialized]);
+  }, [session, activeIdx, doneIdx, templateId, initialized]);
 
   // Muskeln, die die heutige Session trifft (aus der Bibliothek abgeleitet)
   const sessionMuscles = useMemo(() => {
@@ -595,7 +622,6 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
     })));
     setActiveIdx(null);
     setDoneIdx(new Set());
-    setConfirmed(new Set());
     setSaved(false);
   };
 
@@ -684,7 +710,7 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
     setSession(prev => {
       if (prev.some(s => s.name === trimmed)) return prev;
       setActiveIdx(prev.length);   // neue Übung wird aktiv
-      return [...prev, { name: trimmed, sets: lastSetsFor(trimmed) }];
+      return [...prev, { name: trimmed, sets: emptyLikeLast(trimmed) }];
     });
     setNewExerciseName('');
     if (!keepOpen) setShowAddExercise(false);
@@ -723,11 +749,10 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
     setSaved(true);
     if (prs.length > 0) setNewPRs(prs);
     // Editor für die nächste Session frisch machen (Entwurf ist erledigt)
-    setSession(prev => prev.map(ex => ({ name: ex.name, sets: emptySets() })));
+    setSession(prev => prev.map(ex => ({ name: ex.name, sets: emptyLikeLast(ex.name) })));
     setActiveIdx(null);
     setDoneIdx(new Set());
     setEdits({});
-    setConfirmed(new Set());
     startedSetsRef.current = new Set();
     setTimeout(() => setSaved(false), 2500);
   };
@@ -925,12 +950,10 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
               </div>
             )}
 
-            {/* Legende: Vorbelegung aus letzter Session vs. eingetragen */}
-            {ex.sets.some(s => s.weight > 0 || s.reps > 0) && (
-              <p className="text-[9px] font-mono mt-2 mb-1">
-                <span className="text-text-muted">grau = letzte Session</span>
-                <span className="text-text-muted"> · </span>
-                <span className="text-text">hell = eingetragen</span>
+            {/* Legende: graue Platzhalter = letzte Session (nur Vorschlag) */}
+            {Object.keys(prefill).some(k => k.startsWith(`${ex.name}#`)) && (
+              <p className="text-[9px] font-mono mt-2 mb-1 text-text-muted">
+                grau = letzte Session (Vorschlag) · Feld antippen übernimmt sie
               </p>
             )}
 
@@ -965,30 +988,30 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
 
             <div className="space-y-1.5">
               {ex.sets.map((set, setIdx) => {
-                const ghost = !confirmed.has(confirmKey(ex.name, setIdx)) && (set.weight > 0 || set.reps > 0);
-                const numColor = ghost ? 'var(--color-text-muted)' : 'var(--color-text)';
-                const numCls = `brutal-input px-1 py-2.5 text-xs text-center font-mono ${ghost ? 'italic' : ''}`;
+                const pf = prefill[prefillKey(ex.name, setIdx)];
+                const wPlaceholder = pf && pf.w > 0 ? fmtNum(pf.w) : (showTarget && target ? fmtNum(target.weight) : '0');
+                const rPlaceholder = pf && pf.r > 0 ? fmtNum(pf.r) : (showTarget && target ? fmtNum(target.reps) : '0');
+                const numCls = 'brutal-input px-1 py-2.5 text-xs text-center font-mono';
                 return (
                 <div key={setIdx} className="flex items-center gap-1.5">
                   <span className="text-xs text-text-muted w-4 text-right font-mono">{setIdx + 1}</span>
                   <input type="text" inputMode="decimal"
-                    placeholder={showTarget && target ? fmtNum(target.weight) : '0'}
+                    placeholder={wPlaceholder}
                     value={numFieldValue(exIdx, setIdx, 'weight', set.weight)}
-                    onFocus={() => markConfirmed(ex.name, setIdx)}
+                    onFocus={() => fillFromPrefill(exIdx, setIdx, ex.name)}
                     onChange={e => setNumField(exIdx, setIdx, 'weight', e.target.value)}
                     onBlur={() => blurNumField(exIdx, setIdx, 'weight')}
-                    className={`${numCls} w-[68px]`} style={{ color: numColor }} />
+                    className={`${numCls} w-[68px]`} />
                   <span className="text-text-muted text-[10px] uppercase font-mono">kg</span>
                   <input type="text" inputMode="decimal"
-                    placeholder={showTarget && target ? fmtNum(target.reps) : '0'}
+                    placeholder={rPlaceholder}
                     value={numFieldValue(exIdx, setIdx, 'reps', set.reps)}
-                    onFocus={() => markConfirmed(ex.name, setIdx)}
+                    onFocus={() => fillFromPrefill(exIdx, setIdx, ex.name)}
                     onChange={e => setNumField(exIdx, setIdx, 'reps', e.target.value)}
                     onBlur={() => blurNumField(exIdx, setIdx, 'reps')}
-                    className={`${numCls} w-12`} style={{ color: numColor }} />
+                    className={`${numCls} w-12`} />
                   <input type="text" inputMode="decimal" placeholder="RIR"
                     value={numFieldValue(exIdx, setIdx, 'rir', set.rir)}
-                    onFocus={() => markConfirmed(ex.name, setIdx)}
                     onChange={e => setNumField(exIdx, setIdx, 'rir', e.target.value)}
                     onBlur={() => blurNumField(exIdx, setIdx, 'rir')}
                     className="brutal-input w-10 px-0.5 py-2.5 text-xs text-center font-mono"
