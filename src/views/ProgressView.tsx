@@ -13,7 +13,7 @@ import {
 import type { WorkoutEntry } from '../data/model';
 import {
   epley1RM, exerciseVolume, computePRs, overloadTrend, linearTrend, round1, sessionTonnage,
-  strengthLevel, detectStall, STRENGTH_LEVELS,
+  strengthLevel, detectStall, STRENGTH_LEVELS, overallStrengthGrowth,
 } from '../lib/stats';
 import type { Ledger } from '../hooks/useLedger';
 
@@ -151,6 +151,8 @@ export function ProgressView({ ledger }: Props) {
   const [metric, setMetric] = useState<MetricKey>('maxWeight');
   const [timeFilter, setTimeFilter] = useState<number>(90);
   const [selectedPoint, setSelectedPoint] = useState<number | null>(null);
+  const [growthWindow, setGrowthWindow] = useState<number>(90);
+  const growth = useMemo(() => overallStrengthGrowth(workouts, growthWindow), [workouts, growthWindow]);
 
   // Alle Übungen mit geloggten Daten, häufigste zuerst
   const exerciseList = useMemo(() => {
@@ -280,6 +282,61 @@ export function ProgressView({ ledger }: Props) {
   return (
     <div className="p-4">
       <h1 className="text-3xl tracking-wider text-text font-display mb-4 animate-fade-in">Charts</h1>
+
+      {/* Gesamt-Kraftfortschritt: Ø e1RM-Zuwachs über alle Lifts */}
+      <div className="brutal-card-sm p-3 mb-4 animate-slide-up">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="w-4 h-4 text-accent" />
+            <h3 className="text-xs font-bold text-text font-display tracking-wider uppercase">Gesamtfortschritt</h3>
+          </div>
+          <div className="flex gap-1">
+            {[{ d: 90, l: '3M' }, { d: 365, l: '1J' }, { d: Infinity, l: 'Alles' }].map(o => (
+              <button key={o.l} onClick={() => setGrowthWindow(o.d)}
+                className={`brutal-chip px-2 py-0.5 text-[10px] ${growthWindow === o.d ? 'active' : ''}`}>{o.l}</button>
+            ))}
+          </div>
+        </div>
+        {growth.liftCount === 0 ? (
+          <p className="text-[11px] font-mono text-text-dim">Noch zu wenig Daten — mind. 2 Sessions pro Übung im Zeitraum nötig.</p>
+        ) : (
+          <>
+            <div className="flex items-baseline gap-2 mb-2">
+              <span className="text-4xl font-bold font-mono tabular-nums"
+                style={{ color: growth.avgPct >= 0 ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                {growth.avgPct >= 0 ? '+' : ''}{growth.avgPct.toFixed(1)}%
+              </span>
+              <span className="text-[10px] font-mono text-text-dim uppercase tracking-wider">
+                Ø e1RM · {growth.liftCount} {growth.liftCount === 1 ? 'Übung' : 'Übungen'}
+              </span>
+            </div>
+            <div className="space-y-1">
+              {growth.perLift.map(l => {
+                const mag = Math.min(Math.abs(l.pct), 50) / 50 * 100;
+                const pos = l.pct >= 0;
+                return (
+                  <div key={l.name} className="flex items-center gap-2 text-[11px] font-mono">
+                    <span className="text-text-dim flex-1 truncate">{l.name}</span>
+                    <div className="w-24 h-2.5 flex items-center justify-center relative border border-black flex-shrink-0"
+                      style={{ backgroundColor: 'var(--color-concrete)' }}>
+                      <div className="absolute top-0 bottom-0" style={{
+                        left: pos ? '50%' : `${50 - mag / 2}%`,
+                        width: `${mag / 2}%`,
+                        backgroundColor: pos ? 'var(--color-success)' : 'var(--color-danger)',
+                      }} />
+                      <div className="absolute top-0 bottom-0 w-px bg-black/60" style={{ left: '50%' }} />
+                    </div>
+                    <span className="w-14 text-right font-bold flex-shrink-0"
+                      style={{ color: pos ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                      {pos ? '+' : ''}{l.pct.toFixed(1)}%
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Übungsauswahl + Vergleich */}
       <div className="flex gap-2 mb-3 animate-slide-up stagger-1">

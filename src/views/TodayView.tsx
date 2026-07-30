@@ -5,7 +5,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Save, Plus, X, Dumbbell, ChevronDown, ChevronUp, Timer,
   Copy, Trophy, Pause, Play, RotateCcw, ClipboardList, TrendingUp, TrendingDown, Minus, Target, ListChecks,
-  Check, Circle,
+  Check, Circle, StickyNote, Repeat,
 } from 'lucide-react';
 import type { WorkoutEntry, ExerciseEntry, WorkoutTemplate } from '../data/model';
 import { MUSCLE_BY_ID } from '../data/muscles';
@@ -69,6 +69,31 @@ function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
   const firedRef = useRef(false);
   const scheduledRef = useRef<OscillatorNode[]>([]);   // vorgeplante Alarm-Töne
   const keepAliveRef = useRef<{ osc: OscillatorNode; gain: GainNode } | null>(null);
+
+  // Timer-Zustand über Reloads hinweg merken (Endzeit + Dauer). Damit ein noch
+  // laufender Timer nach Neuladen/Zurückkommen weiterläuft statt bei 0 zu stehen.
+  const REST_KEY = 'iron-ledger-rest-timer';
+  const persistTimer = (end: number, dur: number) => {
+    try { localStorage.setItem(REST_KEY, JSON.stringify({ end, duration: dur })); } catch { /* ignore */ }
+  };
+  const clearTimer = () => { try { localStorage.removeItem(REST_KEY); } catch { /* ignore */ } };
+
+  // Beim Laden: lief noch ein Timer? Dann fortsetzen (kein Alarm, wenn schon vorbei).
+  useEffect(() => {
+    const raw = localStorage.getItem(REST_KEY);
+    if (!raw) return;
+    try {
+      const { end, duration: d } = JSON.parse(raw) as { end: number; duration: number };
+      const left = Math.round((end - Date.now()) / 1000);
+      if (left > 0) {
+        setVisible(true); setDuration(d); setRemaining(left);
+        endRef.current = end; setRunning(true);
+      } else {
+        clearTimer();
+      }
+    } catch { clearTimer(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Audio-Kontext auf Nutzergeste anlegen/entsperren (nötig fürs Piepen)
   const ensureAudio = () => {
@@ -158,6 +183,7 @@ function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
       if (left === 0 && !firedRef.current) {
         firedRef.current = true;
         setRunning(false);
+        clearTimer();
         // Ton kommt aus dem vorgeplanten Alarm (feuert auch im Hintergrund);
         // Vibration + Notification sind ergänzende Best-Effort-Signale.
         navigator.vibrate?.([300, 120, 300, 120, 500]);
@@ -196,6 +222,7 @@ function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
     setDuration(secs);
     setRemaining(secs);
     endRef.current = Date.now() + secs * 1000;
+    persistTimer(endRef.current, secs);
     setRunning(true);
   };
 
@@ -205,6 +232,7 @@ function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
     startKeepAlive();
     if (ctx) scheduleAlarm(ctx.currentTime + remaining);
     endRef.current = Date.now() + remaining * 1000;
+    persistTimer(endRef.current, duration);
     setRunning(true);
   };
 
@@ -248,7 +276,7 @@ function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
             </button>
           ))}
         </div>
-        <button onClick={() => { setRunning(false); setRemaining(duration); cancelAlarm(); stopKeepAlive(); releaseWake(); setVisible(false); }}
+        <button onClick={() => { setRunning(false); setRemaining(duration); cancelAlarm(); stopKeepAlive(); releaseWake(); clearTimer(); setVisible(false); }}
           className="text-text-muted hover:text-danger p-1"><X className="w-4 h-4" /></button>
       </div>
       <div className="flex items-center gap-3">
@@ -265,14 +293,14 @@ function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
         </div>
         <div className="flex gap-1">
           {running ? (
-            <button onClick={() => { setRunning(false); cancelAlarm(); stopKeepAlive(); releaseWake(); }} className="brutal-chip px-2.5 py-1.5">
+            <button onClick={() => { setRunning(false); cancelAlarm(); stopKeepAlive(); releaseWake(); clearTimer(); }} className="brutal-chip px-2.5 py-1.5">
               <Pause className="w-3.5 h-3.5" /></button>
           ) : (
             <button onClick={() => remaining > 0 && remaining < duration ? resume() : start(duration)}
               className="brutal-chip px-2.5 py-1.5 active">
               <Play className="w-3.5 h-3.5" /></button>
           )}
-          <button onClick={() => { setRunning(false); setRemaining(duration); cancelAlarm(); stopKeepAlive(); releaseWake(); }}
+          <button onClick={() => { setRunning(false); setRemaining(duration); cancelAlarm(); stopKeepAlive(); releaseWake(); clearTimer(); }}
             className="brutal-chip px-2.5 py-1.5"><RotateCcw className="w-3.5 h-3.5" /></button>
         </div>
       </div>
@@ -384,6 +412,13 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [newExerciseName, setNewExerciseName] = useState('');
   const [expandedRefs, setExpandedRefs] = useState<Set<string>>(new Set());
+  // Aufgeklappte Notizfelder je Satz (Key: name#setIdx)
+  const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set());
+  const toggleNote = (key: string) => setExpandedNotes(prev => {
+    const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n;
+  });
+  // Übung im Training tauschen (z. B. Maschine besetzt) → Auswahl-Panel je Übung
+  const [swapFor, setSwapFor] = useState<string | null>(null);
 
   // Geführtes Training: am Anfang ist KEINE Übung aktiv — alle sind "geplant".
   // Tippt man eine an, wird sie zur aktuellen Übung und rutscht nach ganz oben.
@@ -457,18 +492,32 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
     setShowAddExercise(false);
   }, [workouts, emptyLikeLast]);
 
+  // Volle Sätze der letzten Session (inkl. RIR + Notiz) für die Ghost-Platzhalter.
+  const lastFullSetsFor = useCallback((name: string): { weight: number; reps: number; rir?: number; notes?: string }[] => {
+    const hist = workouts
+      .filter(w => w.exercises.some(e => e.name === name))
+      .sort((a, b) => b.date.localeCompare(a.date));
+    for (const w of hist) {
+      const valid = w.exercises.find(e => e.name === name)!.sets.filter(s => s.weight > 0 && s.reps > 0);
+      if (valid.length) return valid.map(s => ({ weight: s.weight, reps: s.reps, rir: s.rir, notes: s.notes }));
+    }
+    return [];
+  }, [workouts]);
+
   // Platzhalter-Referenz je Satz (letzte Session), abgeleitet aus der Session.
   const prefill = useMemo(() => {
-    const pf: Record<string, { w: number; r: number }> = {};
+    const pf: Record<string, { w: number; r: number; rir?: number; note?: string }> = {};
     const seen = new Set<string>();
     for (const ex of session) {
       if (seen.has(ex.name)) continue;
       seen.add(ex.name);
-      lastSetsFor(ex.name).forEach((s, i) => { pf[prefillKey(ex.name, i)] = { w: s.weight, r: s.reps }; });
+      lastFullSetsFor(ex.name).forEach((s, i) => {
+        pf[prefillKey(ex.name, i)] = { w: s.weight, r: s.reps, rir: s.rir ?? undefined, note: s.notes || undefined };
+      });
     }
     return pf;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.map(e => e.name).join('|'), lastSetsFor]);
+  }, [session.map(e => e.name).join('|'), lastFullSetsFor]);
 
 
   // Erste Initialisierung, sobald Templates geladen sind:
@@ -707,6 +756,33 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
       return n;
     });
     setActiveIdx(a => (a === null ? null : a === exIdx ? null : a > exIdx ? a - 1 : a));
+  };
+
+  // Primärmuskeln einer Übung (aus der Bibliothek)
+  const primaryMusclesOf = useCallback((name: string): MuscleId[] => {
+    const def = exercisesByName.get(name);
+    return def ? def.muscles.filter(m => m.role === 'primary').map(m => m.muscle) : [];
+  }, [exercisesByName]);
+
+  // Alternativen für Quick-Switch: gleiche Primärmuskeln, nicht schon in der Session
+  const swapCandidates = useCallback((name: string) => {
+    const prim = new Set(primaryMusclesOf(name));
+    if (prim.size === 0) return [];
+    return libraryExercises
+      .filter(e => e.name !== name && !session.some(s => s.name === e.name))
+      .filter(e => e.muscles.some(m => m.role === 'primary' && prim.has(m.muscle)))
+      .sort((a, b) => a.name.localeCompare(b.name, 'de'));
+  }, [libraryExercises, session, primaryMusclesOf]);
+
+  // Übung im Training tauschen: Name ersetzen, Sätze der neuen Übung leer vorbelegen
+  const swapExercise = (exIdx: number, newName: string) => {
+    const oldName = session[exIdx]?.name;
+    setSession(prev => prev.map((ex, i) => i === exIdx ? { name: newName, sets: emptyLikeLast(newName) } : ex));
+    if (oldName) {
+      const oi = engagedRef.current.indexOf(oldName);
+      if (oi >= 0) engagedRef.current[oi] = newName;
+    }
+    setSwapFor(null);
   };
 
   const handleAddExercise = (name: string, keepOpen = false) => {
@@ -953,6 +1029,13 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
                   {isDone || !isActive ? `${loggedSets || ex.sets.length}×` : `${ex.sets.length}S`}
                 </span>
                 {isActive && (
+                  <button onClick={() => setSwapFor(swapFor === ex.name ? null : ex.name)}
+                    className="text-text-muted hover:text-accent transition-colors p-1"
+                    title="Übung tauschen (gleicher Muskel)">
+                    <Repeat className="w-4 h-4" />
+                  </button>
+                )}
+                {isActive && (
                   <button onClick={() => removeSessionExercise(exIdx)}
                     className="text-text-muted hover:text-danger transition-colors p-1"
                     title="Aus dieser Session entfernen">
@@ -973,6 +1056,28 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
             {!isActive && !isDone && showTarget && target && (
               <div className="mt-1.5 ml-8 text-[10px] font-mono text-text-muted">
                 Ziel <span className="text-text-dim">{fmtNum(target.weight)}kg × {fmtNum(target.reps)}</span>
+              </div>
+            )}
+
+            {/* Übung tauschen (gleicher Primärmuskel) – z. B. Maschine besetzt */}
+            {isActive && swapFor === ex.name && (
+              <div className="mt-2 mb-1 p-2 brutal-card-sm animate-slide-up" style={{ backgroundColor: 'var(--color-concrete)' }}>
+                <p className="text-[10px] font-mono uppercase tracking-wider text-text-muted mb-1.5">
+                  Tauschen gegen (gleicher Muskel):
+                </p>
+                {(() => {
+                  const cands = swapCandidates(ex.name);
+                  return cands.length ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {cands.map(c => (
+                        <button key={c.name} onClick={() => swapExercise(exIdx, c.name)}
+                          className="brutal-chip px-2 py-1 text-[11px]">{c.name}</button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[10px] font-mono text-text-dim">Keine passende Alternative in der Bibliothek.</p>
+                  );
+                })()}
               </div>
             )}
 
@@ -1038,40 +1143,69 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
                 const pf = prefill[prefillKey(ex.name, setIdx)];
                 const wPlaceholder = pf && pf.w > 0 ? fmtNum(pf.w) : (showTarget && target ? fmtNum(target.weight) : '0');
                 const rPlaceholder = pf && pf.r > 0 ? fmtNum(pf.r) : (showTarget && target ? fmtNum(target.reps) : '0');
+                const rirPlaceholder = pf && pf.rir != null ? fmtNum(pf.rir) : 'RIR';
                 const numCls = 'brutal-input px-1 py-2.5 text-xs text-center font-mono';
+                const noteKey = prefillKey(ex.name, setIdx);
+                const noteOpen = expandedNotes.has(noteKey);
+                const hasNote = !!(set.notes && set.notes.trim());
+                const lastNote = pf?.note;
                 return (
-                <div key={setIdx} className="flex items-center gap-1.5">
+                <div key={setIdx} className="space-y-1">
+                <div className="flex items-center gap-1.5">
                   <span className="text-xs text-text-muted w-4 text-right font-mono">{setIdx + 1}</span>
                   <input type="text" inputMode="decimal"
                     placeholder={wPlaceholder}
                     value={numFieldValue(exIdx, setIdx, 'weight', set.weight)}
                     onChange={e => setNumField(exIdx, setIdx, 'weight', e.target.value)}
                     onBlur={() => blurNumField(exIdx, setIdx, 'weight')}
-                    className={`${numCls} w-[68px]`} />
+                    className={`${numCls} flex-1 min-w-0`} />
                   <span className="text-text-muted text-[10px] uppercase font-mono">kg</span>
                   <input type="text" inputMode="decimal"
                     placeholder={rPlaceholder}
                     value={numFieldValue(exIdx, setIdx, 'reps', set.reps)}
                     onChange={e => setNumField(exIdx, setIdx, 'reps', e.target.value)}
                     onBlur={() => blurNumField(exIdx, setIdx, 'reps')}
-                    className={`${numCls} w-12`} />
-                  <input type="text" inputMode="decimal" placeholder="RIR"
+                    className={`${numCls} w-11`} />
+                  <input type="text" inputMode="decimal" placeholder={rirPlaceholder}
                     value={numFieldValue(exIdx, setIdx, 'rir', set.rir)}
                     onChange={e => setNumField(exIdx, setIdx, 'rir', e.target.value)}
                     onBlur={() => blurNumField(exIdx, setIdx, 'rir')}
                     className="brutal-input w-10 px-0.5 py-2.5 text-xs text-center font-mono"
                     style={{ color: 'var(--color-warning)' }}
                     title="Reps in Reserve (optional)" />
-                  <input type="text" placeholder="Notiz"
-                    value={set.notes || ''}
-                    onChange={e => updateSet(exIdx, setIdx, 'notes', e.target.value)}
-                    className="brutal-input flex-1 px-2 py-2.5 text-xs font-mono min-w-0" />
+                  {/* Notiz-Umschalter: gefüllt = eigene Notiz, ! = Notiz vom letzten Mal */}
+                  <button onClick={() => toggleNote(noteKey)}
+                    className="relative flex-shrink-0 p-1.5 border-2 border-black"
+                    style={{ backgroundColor: hasNote ? 'var(--color-accent)' : 'var(--color-steel)' }}
+                    title={hasNote ? 'Notiz bearbeiten' : lastNote ? `Letzte Notiz: ${lastNote}` : 'Notiz hinzufügen'}>
+                    <StickyNote className="w-3.5 h-3.5" style={{ color: hasNote ? '#000' : 'var(--color-text-dim)' }} />
+                    {!hasNote && lastNote && (
+                      <span className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 rounded-full flex items-center justify-center text-[9px] font-bold"
+                        style={{ backgroundColor: 'var(--color-warning)', color: '#000' }}>!</span>
+                    )}
+                  </button>
                   {ex.sets.length > 1 && (
                     <button onClick={() => removeSet(exIdx, setIdx)}
                       className="text-text-muted hover:text-danger flex-shrink-0 p-1">
                       <X className="w-3.5 h-3.5" />
                     </button>
                   )}
+                </div>
+                {noteOpen && (
+                  <div className="pl-5 animate-slide-up">
+                    {lastNote && (
+                      <button onClick={() => !hasNote && updateSet(exIdx, setIdx, 'notes', lastNote)}
+                        className="block w-full text-left text-[10px] font-mono text-warning mb-1 truncate"
+                        title="Tippen zum Übernehmen">
+                        ! Letztes Mal: <span className="text-text-dim">{lastNote}</span>
+                      </button>
+                    )}
+                    <textarea placeholder="Notiz zu diesem Satz…" rows={2}
+                      value={set.notes || ''}
+                      onChange={e => updateSet(exIdx, setIdx, 'notes', e.target.value)}
+                      className="brutal-input w-full px-2 py-2 text-xs font-mono min-w-0 resize-y leading-relaxed" />
+                  </div>
+                )}
                 </div>
                 );
               })}

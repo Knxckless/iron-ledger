@@ -507,6 +507,54 @@ export function nextUpTemplateId(
   return tpls[lastPos < 0 ? 0 : (lastPos + 1) % tpls.length].id;
 }
 
+// ===== Gesamt-Kraftfortschritt über alle Lifts =====
+
+export interface LiftGrowth {
+  name: string;
+  startE1RM: number;
+  endE1RM: number;
+  pct: number;        // prozentuale Veränderung im Zeitraum
+  sessions: number;
+}
+export interface OverallGrowth {
+  avgPct: number;         // Durchschnitt über alle qualifizierten Übungen
+  liftCount: number;
+  perLift: LiftGrowth[];   // nach pct absteigend
+}
+
+// Für jede Übung: e1RM der ersten vs. letzten Session im Zeitraum (min. 2 Sessions).
+// Headline = Durchschnitt der prozentualen Zuwächse über alle Übungen.
+export function overallStrengthGrowth(workouts: WorkoutEntry[], sinceDays: number): OverallGrowth {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - sinceDays);
+  const cutoffStr = isFinite(sinceDays) ? cutoff.toISOString().split('T')[0] : '0000-01-01';
+
+  // Übung → [{date, e1rm}] (bestes e1RM je Session im Zeitraum)
+  const byEx = new Map<string, { date: string; e1rm: number }[]>();
+  for (const w of workouts) {
+    if (w.date < cutoffStr) continue;
+    for (const ex of w.exercises) {
+      const best = bestE1RM(ex.sets);
+      if (best <= 0) continue;
+      if (!byEx.has(ex.name)) byEx.set(ex.name, []);
+      byEx.get(ex.name)!.push({ date: w.date, e1rm: best });
+    }
+  }
+
+  const perLift: LiftGrowth[] = [];
+  for (const [name, pts] of byEx) {
+    const sorted = pts.sort((a, b) => a.date.localeCompare(b.date));
+    if (sorted.length < 2) continue;
+    const start = sorted[0].e1rm;
+    const end = sorted[sorted.length - 1].e1rm;
+    if (start <= 0) continue;
+    perLift.push({ name, startE1RM: start, endE1RM: end, pct: ((end - start) / start) * 100, sessions: sorted.length });
+  }
+  perLift.sort((a, b) => b.pct - a.pct);
+  const avgPct = perLift.length ? perLift.reduce((s, l) => s + l.pct, 0) / perLift.length : 0;
+  return { avgPct, liftCount: perLift.length, perLift };
+}
+
 // ===== Stagnations-Erkennung =====
 
 export interface StallInfo { stalling: boolean; sessionsFlat: number; }
