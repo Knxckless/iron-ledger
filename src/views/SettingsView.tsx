@@ -2,11 +2,18 @@
 // Übungen & Workouts (Bibliothek), Routinen, Backup/Import und Werksreset.
 
 import { useState, useRef } from 'react';
-import { ArrowLeft, Download, Upload, Trash2, BookOpen, ListChecks, Database, Target } from 'lucide-react';
+import { ArrowLeft, Download, Upload, Trash2, BookOpen, ListChecks, Database, Target, Palette } from 'lucide-react';
 import { RoutineSettings } from '../components/RoutineSettings';
 import { LibraryView } from './LibraryView';
 import { exportBackup, importBackup, resetAll } from '../lib/storage';
 import type { Ledger } from '../hooks/useLedger';
+import type { ThemeId } from '../data/model';
+
+const THEMES: { id: ThemeId; name: string; desc: string; swatch: string[] }[] = [
+  { id: 'beton',    name: 'Beton',    desc: 'Original — Industrie, Safety-Orange', swatch: ['#1a1a1a', '#333333', '#ff6b00'] },
+  { id: 'obsidian', name: 'Obsidian', desc: 'Dunkel — Bronze & Gold, Antike',      swatch: ['#141009', '#2a2318', '#b0894f'] },
+  { id: 'marmor',   name: 'Marmor',   desc: 'Hell — Marmor & Bronze',              swatch: ['#e8e1d1', '#f6f1e6', '#a9793d'] },
+];
 
 interface Props {
   ledger: Ledger;
@@ -64,6 +71,36 @@ export function SettingsView({ ledger, onClose }: Props) {
       </div>
 
       <div className="px-4 pt-4 space-y-6">
+        {/* DESIGN */}
+        <section>
+          <div className="flex items-center gap-2 mb-2">
+            <Palette className="w-4 h-4 text-accent" />
+            <h2 className="section-label !text-sm">Design</h2>
+          </div>
+          <div className="space-y-2">
+            {THEMES.map(t => {
+              const active = (settings.theme ?? 'beton') === t.id;
+              return (
+                <button key={t.id} onClick={() => updateSettings({ theme: t.id })}
+                  className="w-full brutal-card-sm p-3 flex items-center gap-3 text-left transition-all"
+                  style={active ? { borderColor: 'var(--color-accent)', boxShadow: '3px 3px 0 var(--color-accent)' } : {}}>
+                  <span className="flex flex-shrink-0 border-2 border-black">
+                    {t.swatch.map((c, i) => <span key={i} className="w-5 h-8 block" style={{ backgroundColor: c }} />)}
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-sm font-bold text-text font-display tracking-wider uppercase">{t.name}</span>
+                    <span className="block text-[10px] text-text-dim font-mono mt-0.5">{t.desc}</span>
+                  </span>
+                  <span className="w-5 h-5 flex-shrink-0 border-2 border-black flex items-center justify-center"
+                    style={{ backgroundColor: active ? 'var(--color-accent)' : 'transparent' }}>
+                    {active && <span className="w-2 h-2 bg-black block" />}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
         {/* TRAINING */}
         <section>
           <div className="flex items-center gap-2 mb-2">

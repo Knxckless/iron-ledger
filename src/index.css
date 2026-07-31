@@ -21,6 +21,58 @@
   --shadow-brutal-lg: 6px 6px 0px #000000;
   --border-brutal: 2px solid #000000;
   --border-brutal-thin: 1px solid #333333;
+  --border-brutal-color: #000000;
+  --font-display: 'Bebas Neue', sans-serif;
+}
+
+/* ===== THEMES ===== */
+/* 'beton' = Standard (oben in @theme definiert). Die zwei neuen Themes überschreiben
+   nur die Tokens — alle Utilities & brutal-* Klassen referenzieren die Variablen. */
+
+/* Obsidian — dunkel, Bronze/Gold, spartanisches Rot, Inschriften-Serife */
+:root[data-theme="obsidian"] {
+  --color-bg: #141009;
+  --color-concrete: #201a11;
+  --color-steel: #2a2318;
+  --color-steel-light: #362c1f;
+  --color-accent: #b0894f;
+  --color-accent-hot: #d9b45b;
+  --color-warning: #e0b94e;
+  --color-success: #7ea15c;
+  --color-danger: #c8443b;
+  --color-text: #ece4d3;
+  --color-text-dim: #b3a690;
+  --color-text-muted: #7d735f;
+  --color-pull: #6f8faf;
+  --color-push: #b5544e;
+  --color-leg: #86a86a;
+  --shadow-brutal: 4px 4px 0px #000000;
+  --shadow-brutal-sm: 3px 3px 0px #000000;
+  --shadow-brutal-lg: 6px 6px 0px #000000;
+  --font-display: 'Cinzel', 'Trajan Pro', Georgia, serif;
+}
+
+/* Marmor — hell, warmer Stein, Bronze, spartanisches Rot */
+:root[data-theme="marmor"] {
+  --color-bg: #e8e1d1;
+  --color-concrete: #efe8d8;
+  --color-steel: #f6f1e6;
+  --color-steel-light: #e2d8c4;
+  --color-accent: #a9793d;
+  --color-accent-hot: #c2953f;
+  --color-warning: #b0842a;
+  --color-success: #4e7d3f;
+  --color-danger: #9e2b25;
+  --color-text: #1d1811;
+  --color-text-dim: #5f5647;
+  --color-text-muted: #8a7f6a;
+  --color-pull: #4d6c94;
+  --color-push: #a5443e;
+  --color-leg: #5c7d47;
+  --shadow-brutal: 4px 4px 0px rgba(29,24,17,.22);
+  --shadow-brutal-sm: 3px 3px 0px rgba(29,24,17,.20);
+  --shadow-brutal-lg: 6px 6px 0px rgba(29,24,17,.22);
+  --font-display: 'Cinzel', 'Trajan Pro', Georgia, serif;
 }
 
 * {
@@ -44,7 +96,7 @@ body {
 }
 
 h1, h2, h3, .font-display {
-  font-family: 'Bebas Neue', sans-serif;
+  font-family: var(--font-display);
   letter-spacing: 0.04em;
 }
 
@@ -76,7 +128,7 @@ h1, h2, h3, .font-display {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  font-family: 'Bebas Neue', sans-serif;
+  font-family: var(--font-display);
   font-size: 1.1rem;
   letter-spacing: 0.06em;
   border: var(--border-brutal);
@@ -125,7 +177,7 @@ h1, h2, h3, .font-display {
 .brutal-chip {
   display: inline-flex;
   align-items: center;
-  font-family: 'Bebas Neue', sans-serif;
+  font-family: var(--font-display);
   font-size: 0.8rem;
   letter-spacing: 0.05em;
   border: var(--border-brutal-thin);
@@ -228,7 +280,7 @@ input[type="number"] {
 /* ===== REUSABLE ===== */
 .section-label {
   display: block;
-  font-family: 'Bebas Neue', sans-serif;
+  font-family: var(--font-display);
   font-size: 0.65rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -236,7 +288,7 @@ input[type="number"] {
 }
 
 .stat-number {
-  font-family: 'Bebas Neue', sans-serif;
+  font-family: var(--font-display);
   font-size: 2.5rem;
   line-height: 1;
   letter-spacing: 0.02em;

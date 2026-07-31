@@ -24,6 +24,17 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const ledger = useLedger();
 
+  // Design-Theme auf <html> anwenden (Tokens in index.css). 'beton' = Standard.
+  const theme = ledger.settings.theme ?? 'beton';
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) {
+      const bg = getComputedStyle(document.documentElement).getPropertyValue('--color-bg').trim();
+      if (bg) meta.setAttribute('content', bg);
+    }
+  }, [theme]);
+
   const handleStartTraining = useCallback((templateId?: string) => {
     setPendingTemplateId(templateId);
     setShowSettings(false);

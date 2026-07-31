@@ -102,8 +102,11 @@ export interface Routine {
 }
 
 // App-weite Einstellungen (klein gehalten, erweiterbar)
+export type ThemeId = 'beton' | 'obsidian' | 'marmor';
+
 export interface Settings {
   activeRoutineId?: string;
+  theme?: ThemeId;            // Design: 'beton' (Standard/Original), 'obsidian', 'marmor'
   // Pausentimer
   timerAutoStart?: boolean;   // nach jedem Satz automatisch starten (Default an)
   restDefaultSec?: number;    // Standard-Pausenlänge (Default 180 s)
