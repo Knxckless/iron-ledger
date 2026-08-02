@@ -1,4 +1,4 @@
-const CACHE = 'iron-ledger-v13';
+const CACHE = 'iron-ledger-v14';
 // Relativ zur SW-Position (…/iron-ledger/sw.js) — funktioniert im Unterpfad wie lokal
 const ASSETS = [
   './',
