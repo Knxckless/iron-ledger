@@ -69,7 +69,7 @@ export function workoutLabel(w: WorkoutEntry): string {
 export function workoutColor(w: WorkoutEntry, templates?: WorkoutTemplate[]): string {
   if (w.type !== 'custom') return PRESET_COLORS[w.type] || 'var(--color-accent)';
   const tpl = templates?.find(t => t.id === w.templateId);
-  return tpl?.color || '#ff6b00';
+  return tpl?.color || 'var(--color-accent)';
 }
 
 // ===== Diätphasen (Gewichts-Tracker) =====
@@ -87,7 +87,7 @@ export interface DietPhase {
 
 export const DIET_PHASE_INFO: Record<DietPhaseType, { label: string; color: string; goal: string }> = {
   cut:      { label: 'Diät',       color: '#448aff', goal: 'abnehmen' },
-  bulk:     { label: 'Aufbau',     color: '#ff6b00', goal: 'zunehmen' },
+  bulk:     { label: 'Aufbau',     color: 'var(--color-accent)', goal: 'zunehmen' },
   maintain: { label: 'Erhaltung',  color: '#9e9e9e', goal: 'halten' },
 };
 
