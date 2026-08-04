@@ -8,6 +8,7 @@ import {
 import { Flame, Scale, Trash2, Utensils, Target, TrendingDown, TrendingUp, Minus, Settings2 } from 'lucide-react';
 import { DIET_PHASE_INFO } from '../data/model';
 import { movingAverage, weightTrendRate, adaptiveTDEE, mifflinTDEE } from '../lib/stats';
+import { BodyMetricsPanel } from '../components/BodyMetricsPanel';
 import type { Ledger } from '../hooks/useLedger';
 
 interface Props { ledger: Ledger; }
@@ -184,6 +185,11 @@ export function NutritionView({ ledger }: Props) {
         <p className="text-[9px] text-text-muted font-mono mt-1.5">
           Dünn = Tageswert · Kräftig = gleitender 7-Tage-Schnitt (glättet Wasser­schwankungen)
         </p>
+      </div>
+
+      {/* DIÄTPHASEN + KÖRPERMASSE (Taille/Brust/Arm/Bein) — Gewicht kommt oben aus dem Trend */}
+      <div className="mb-5">
+        <BodyMetricsPanel ledger={ledger} hideWeightMetric showPhases />
       </div>
 
       {/* KALORIENBEDARF */}

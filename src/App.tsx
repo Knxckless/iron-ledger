@@ -109,7 +109,7 @@ function App() {
           </div>
         ) : (
           <div key={tab} className="animate-fade-in">
-            {tab === 'home' && <HomeView ledger={ledger} onStartTraining={handleStartTraining} onOpenSettings={() => setShowSettings(true)} />}
+            {tab === 'home' && <HomeView ledger={ledger} onStartTraining={handleStartTraining} onOpenSettings={() => setShowSettings(true)} onOpenDiet={() => selectTab('nutrition')} />}
             {tab === 'today' && <TodayView ledger={ledger} initialTemplateId={pendingTemplateId} onOpenLibrary={() => setShowLibrary(true)} />}
             {tab === 'nutrition' && <NutritionView ledger={ledger} />}
             {tab === 'history' && <HistoryView ledger={ledger} />}
