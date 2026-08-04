@@ -24,7 +24,8 @@ npx serve dist       # Serve production build (for phone testing)
 ```
 src/
   main.tsx                              # Entry, SW registration
-  App.tsx                               # Shell: 5-tab nav (Start|Training|Übungen|Verlauf|Charts)
+  App.tsx                               # Shell: 5-tab nav (Start|Training|Analyse|Diät|Verlauf)
+                                        #   + Bibliothek- & Einstellungen-Overlays
   index.css                             # Brutalist design system, fonts, animations
   data/
     seedData.ts                         # 228 parsed CSV entries (v1 types + seed array)
