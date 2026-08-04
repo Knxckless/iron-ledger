@@ -15,6 +15,7 @@ import {
   epley1RM, exerciseVolume, computePRs, overloadTrend, linearTrend, round1, sessionTonnage,
   strengthLevel, detectStall, STRENGTH_LEVELS, overallStrengthGrowth,
 } from '../lib/stats';
+import { MuscleAnalysis } from '../components/MuscleAnalysis';
 import type { Ledger } from '../hooks/useLedger';
 
 interface Props {
@@ -264,12 +265,14 @@ export function ProgressView({ ledger }: Props) {
   if (!effectiveExercise) {
     return (
       <div className="p-4">
-        <h1 className="text-3xl tracking-wider text-text font-display mb-4">Charts</h1>
-        <div className="text-center py-16 animate-fade-in">
+        <h1 className="text-3xl tracking-wider text-text font-display mb-4">Analyse</h1>
+        <MuscleAnalysis ledger={ledger} />
+        <div className="text-center py-10 animate-fade-in">
           <div className="w-16 h-16 brutal-card-sm flex items-center justify-center mx-auto mb-4" style={{ borderStyle: 'dashed' }}>
             <TrendingUp className="w-8 h-8 text-text-muted" />
           </div>
-          <p className="text-text-muted text-sm uppercase tracking-widest font-display">Keine Daten</p>
+          <p className="text-text-muted text-sm uppercase tracking-widest font-display">Noch keine Übungs-Charts</p>
+          <p className="text-[10px] text-text-muted font-mono mt-1">Logge ein paar Sessions für Verläufe pro Übung.</p>
         </div>
       </div>
     );
@@ -281,7 +284,10 @@ export function ProgressView({ ledger }: Props) {
 
   return (
     <div className="p-4">
-      <h1 className="text-3xl tracking-wider text-text font-display mb-4 animate-fade-in">Charts</h1>
+      <h1 className="text-3xl tracking-wider text-text font-display mb-4 animate-fade-in">Analyse</h1>
+
+      {/* Muskel-Tracking: Heatmap, Balance, Ø Sätze/Woche */}
+      <MuscleAnalysis ledger={ledger} />
 
       {/* Gesamt-Kraftfortschritt: Ø e1RM-Zuwachs über alle Lifts */}
       <div className="brutal-card-sm p-3 mb-4 animate-slide-up">
