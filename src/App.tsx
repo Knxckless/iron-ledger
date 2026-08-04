@@ -6,22 +6,24 @@ import { HistoryView } from './views/HistoryView';
 import { ProgressView } from './views/ProgressView';
 import { NutritionView } from './views/NutritionView';
 import { SettingsView } from './views/SettingsView';
+import { LibraryView } from './views/LibraryView';
 import { Home, Dumbbell, Clock, TrendingUp, Apple } from 'lucide-react';
 
-type Tab = 'home' | 'today' | 'nutrition' | 'history' | 'progress';
+type Tab = 'home' | 'today' | 'progress' | 'nutrition' | 'history';
 
 const TABS: { key: Tab; icon: typeof Home; label: string }[] = [
   { key: 'home', icon: Home, label: 'Start' },
   { key: 'today', icon: Dumbbell, label: 'Training' },
+  { key: 'progress', icon: TrendingUp, label: 'Analyse' },
   { key: 'nutrition', icon: Apple, label: 'Diät' },
   { key: 'history', icon: Clock, label: 'Verlauf' },
-  { key: 'progress', icon: TrendingUp, label: 'Charts' },
 ];
 
 function App() {
   const [tab, setTab] = useState<Tab>('home');
   const [pendingTemplateId, setPendingTemplateId] = useState<string | undefined>();
   const [showSettings, setShowSettings] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
   const ledger = useLedger();
 
   // Design-Theme auf <html> anwenden (Tokens in index.css). 'beton' = Standard.
@@ -38,6 +40,7 @@ function App() {
   const handleStartTraining = useCallback((templateId?: string) => {
     setPendingTemplateId(templateId);
     setShowSettings(false);
+    setShowLibrary(false);
     setTab('today');
   }, []);
 
@@ -47,13 +50,13 @@ function App() {
     if (tab !== 'today' && pendingTemplateId !== undefined) setPendingTemplateId(undefined);
   }, [tab, pendingTemplateId]);
 
-  const selectTab = useCallback((key: Tab) => { setShowSettings(false); setTab(key); }, []);
+  const selectTab = useCallback((key: Tab) => { setShowSettings(false); setShowLibrary(false); setTab(key); }, []);
 
   // Wischen nach links/rechts wechselt den Tab. Gesten auf horizontal scroll-
   // baren Elementen (Chip-Leisten, Chart-Brush) oder Eingaben werden ignoriert.
   const touchRef = useRef<{ x: number; y: number; skip: boolean } | null>(null);
   const onTouchStart = (e: React.TouchEvent) => {
-    if (showSettings || e.touches.length !== 1) { touchRef.current = null; return; }
+    if (showSettings || showLibrary || e.touches.length !== 1) { touchRef.current = null; return; }
     const t = e.touches[0];
     let skip = false;
     let el = e.target as HTMLElement | null;
@@ -100,10 +103,14 @@ function App() {
           <div className="animate-fade-in">
             <SettingsView ledger={ledger} onClose={() => setShowSettings(false)} />
           </div>
+        ) : showLibrary ? (
+          <div className="animate-fade-in">
+            <LibraryView ledger={ledger} onClose={() => setShowLibrary(false)} />
+          </div>
         ) : (
           <div key={tab} className="animate-fade-in">
             {tab === 'home' && <HomeView ledger={ledger} onStartTraining={handleStartTraining} onOpenSettings={() => setShowSettings(true)} />}
-            {tab === 'today' && <TodayView ledger={ledger} initialTemplateId={pendingTemplateId} />}
+            {tab === 'today' && <TodayView ledger={ledger} initialTemplateId={pendingTemplateId} onOpenLibrary={() => setShowLibrary(true)} />}
             {tab === 'nutrition' && <NutritionView ledger={ledger} />}
             {tab === 'history' && <HistoryView ledger={ledger} />}
             {tab === 'progress' && <ProgressView ledger={ledger} />}

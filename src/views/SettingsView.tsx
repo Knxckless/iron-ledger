@@ -1,10 +1,10 @@
 // Einstellungen (Vollbild, über das Zahnrad auf der Startseite erreichbar):
-// Übungen & Workouts (Bibliothek), Routinen, Backup/Import und Werksreset.
+// Design, Training-Optionen, Routinen, Backup/Import und Werksreset.
+// (Die Übungs-/Workout-Bibliothek ist ein eigenes Overlay, erreichbar aus dem Training.)
 
 import { useState, useRef } from 'react';
-import { ArrowLeft, Download, Upload, Trash2, BookOpen, ListChecks, Database, Target, Palette } from 'lucide-react';
+import { ArrowLeft, Download, Upload, Trash2, ListChecks, Database, Target, Palette } from 'lucide-react';
 import { RoutineSettings } from '../components/RoutineSettings';
-import { LibraryView } from './LibraryView';
 import { exportBackup, importBackup, resetAll } from '../lib/storage';
 import type { Ledger } from '../hooks/useLedger';
 import type { ThemeId } from '../data/model';
@@ -66,7 +66,7 @@ export function SettingsView({ ledger, onClose }: Props) {
         </button>
         <div>
           <h1 className="text-2xl tracking-wider text-text font-display leading-none">Einstellungen</h1>
-          <p className="text-[10px] text-text-dim uppercase tracking-widest font-mono">Übungen · Routinen · Backup</p>
+          <p className="text-[10px] text-text-dim uppercase tracking-widest font-mono">Design · Routinen · Backup</p>
         </div>
       </div>
 
@@ -132,18 +132,6 @@ export function SettingsView({ ledger, onClose }: Props) {
             <h2 className="section-label !text-sm">Routinen</h2>
           </div>
           <RoutineSettings ledger={ledger} />
-        </section>
-
-        {/* ÜBUNGEN & WORKOUTS (komplette Bibliothek) */}
-        <section>
-          <div className="flex items-center gap-2 mb-1">
-            <BookOpen className="w-4 h-4 text-accent" />
-            <h2 className="section-label !text-sm">Übungen & Workouts</h2>
-          </div>
-          {/* LibraryView bringt eigenen Header/Padding mit → negativer Rand gleicht das aus */}
-          <div className="-mx-4">
-            <LibraryView ledger={ledger} />
-          </div>
         </section>
 
         {/* BACKUP + RESET */}

@@ -5,7 +5,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Save, Plus, X, Dumbbell, ChevronDown, ChevronUp, Timer,
   Copy, Trophy, Pause, Play, RotateCcw, ClipboardList, TrendingUp, TrendingDown, Minus, Target, ListChecks,
-  Check, Circle, StickyNote, Repeat,
+  Check, Circle, StickyNote, Repeat, BookOpen,
 } from 'lucide-react';
 import type { WorkoutEntry, ExerciseEntry, WorkoutTemplate } from '../data/model';
 import { MUSCLE_BY_ID } from '../data/muscles';
@@ -27,6 +27,7 @@ interface WorkoutDraft {
 interface Props {
   ledger: Ledger;
   initialTemplateId?: string;   // von "Heute dran" auf Start: dieses Workout vorwählen
+  onOpenLibrary?: () => void;   // Übungs-/Workout-Bibliothek als Overlay öffnen
 }
 
 const TIMER_PRESETS = [60, 90, 120, 180];
@@ -379,7 +380,7 @@ function PRCelebration({ prs, onClose }: { prs: NewPR[]; onClose: () => void }) 
 
 // ===== Hauptview =====
 
-export function TodayView({ ledger, initialTemplateId }: Props) {
+export function TodayView({ ledger, initialTemplateId, onOpenLibrary }: Props) {
   const { templates, exercises: libraryExercises, exercisesByName, workouts, addWorkout, addExercise,
     routines, settings, updateSettings } = ledger;
 
@@ -884,7 +885,16 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
             {new Date().toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })}
           </p>
         </div>
-        <Dumbbell className="w-8 h-8 text-accent" />
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {onOpenLibrary && (
+            <button onClick={onOpenLibrary}
+              className="brutal-chip px-2.5 py-2 flex items-center gap-1.5"
+              aria-label="Übungen & Workouts bearbeiten">
+              <BookOpen className="w-4 h-4" />
+            </button>
+          )}
+          <Dumbbell className="w-8 h-8 text-accent" />
+        </div>
       </div>
 
       <RestTimer
