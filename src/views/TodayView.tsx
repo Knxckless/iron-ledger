@@ -53,11 +53,12 @@ function belongsTo(w: WorkoutEntry, tpl: WorkoutTemplate): boolean {
 
 // ===== Pausentimer (Countdown) =====
 
-function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
+function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal, stopSignal }: {
   defaultSec: number;
   autoStart: boolean;
   onToggleAutoStart: (v: boolean) => void;
   startSignal: number;
+  stopSignal: number;
 }) {
   const [visible, setVisible] = useState(false);
   const [duration, setDuration] = useState(defaultSec);
@@ -250,6 +251,21 @@ function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startSignal]);
 
+  // Timer bei Workout-Ende (Speichern) komplett stoppen und ausblenden.
+  const seenStop = useRef(stopSignal);
+  useEffect(() => {
+    if (stopSignal === seenStop.current) return;
+    seenStop.current = stopSignal;
+    setRunning(false);
+    setRemaining(duration);
+    cancelAlarm();
+    stopKeepAlive();
+    releaseWake();
+    clearTimer();
+    setVisible(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stopSignal]);
+
   const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
   const progress = duration > 0 ? remaining / duration : 0;
   const done = !running && remaining === 0;
@@ -371,6 +387,7 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
   const restDefault = settings.restDefaultSec ?? 180;
   const autoStartRest = settings.timerAutoStart ?? true;
   const [restSignal, setRestSignal] = useState(0);
+  const [restStopSignal, setRestStopSignal] = useState(0);
   // Sätze, die den Auto-Start schon ausgelöst haben (verhindert Mehrfachstart)
   const startedSetsRef = useRef<Set<string>>(new Set());
   // Tatsächlich trainierte Reihenfolge (Übungsnamen in Aktivierungs-/Erledigt-
@@ -840,6 +857,7 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
     addWorkout(entry);
     localStorage.removeItem(KEYS.draft);
     setSaved(true);
+    setRestStopSignal(s => s + 1);   // Pausentimer bei Workout-Ende stoppen
     if (prs.length > 0) setNewPRs(prs);
     // Editor für die nächste Session frisch machen (Entwurf ist erledigt)
     setSession(prev => prev.map(ex => ({ name: ex.name, sets: emptyLikeLast(ex.name) })));
@@ -873,7 +891,8 @@ export function TodayView({ ledger, initialTemplateId }: Props) {
         defaultSec={restDefault}
         autoStart={autoStartRest}
         onToggleAutoStart={v => updateSettings({ timerAutoStart: v })}
-        startSignal={restSignal} />
+        startSignal={restSignal}
+        stopSignal={restStopSignal} />
 
       {/* Aktive Routine (falls gesetzt) */}
       {activeRoutine && (
