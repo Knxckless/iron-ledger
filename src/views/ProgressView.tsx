@@ -8,11 +8,14 @@ import {
 } from 'recharts';
 import {
   TrendingUp, TrendingDown, Minus, ChevronDown, Target, StickyNote, Trophy, X, GitCompareArrows,
+  Award, AlertTriangle,
 } from 'lucide-react';
 import type { WorkoutEntry } from '../data/model';
 import {
   epley1RM, exerciseVolume, computePRs, overloadTrend, linearTrend, round1, sessionTonnage,
+  strengthLevel, detectStall, STRENGTH_LEVELS, overallStrengthGrowth,
 } from '../lib/stats';
+import { MuscleAnalysis } from '../components/MuscleAnalysis';
 import type { Ledger } from '../hooks/useLedger';
 
 interface Props {
@@ -135,13 +138,22 @@ function DetailTooltip({ active, payload, metric }: {
 }
 
 export function ProgressView({ ledger }: Props) {
-  const { workouts } = ledger;
+  const { workouts, metrics, settings } = ledger;
+
+  // Körpergewicht (letzter Eintrag) + Geschlecht → Kraftstandard-Einordnung
+  const bodyweight = useMemo(() => {
+    const w = metrics.filter(m => m.metric === 'weight').sort((a, b) => b.date.localeCompare(a.date));
+    return w.length ? w[0].value : null;
+  }, [metrics]);
+  const sex = settings.sex ?? null;
   const [selectedExercise, setSelectedExercise] = useState<string | null>(null);
   const [compareExercise, setCompareExercise] = useState<string | null>(null);
   const [showCompareSelect, setShowCompareSelect] = useState(false);
   const [metric, setMetric] = useState<MetricKey>('maxWeight');
   const [timeFilter, setTimeFilter] = useState<number>(90);
   const [selectedPoint, setSelectedPoint] = useState<number | null>(null);
+  const [growthWindow, setGrowthWindow] = useState<number>(90);
+  const growth = useMemo(() => overallStrengthGrowth(workouts, growthWindow), [workouts, growthWindow]);
 
   // Alle Übungen mit geloggten Daten, häufigste zuerst
   const exerciseList = useMemo(() => {
@@ -210,6 +222,19 @@ export function ProgressView({ ledger }: Props) {
     [workouts, effectiveExercise]
   );
 
+  // Kraftstandard-Einordnung (nur für Grundübungen mit Standard-Match)
+  const strength = useMemo(() => {
+    if (!effectiveExercise || !prs?.bestE1RM || !bodyweight || !sex) return null;
+    return strengthLevel(effectiveExercise, prs.bestE1RM.value, bodyweight, sex);
+  }, [effectiveExercise, prs, bodyweight, sex]);
+
+  // Stagnations-Check über die gesamte e1RM-Historie
+  const stall = useMemo(() => {
+    if (!effectiveExercise) return null;
+    const all = sessionsFor(workouts, effectiveExercise, null);
+    return detectStall(all.map(p => ({ date: p.date, value: p.e1rm })));
+  }, [workouts, effectiveExercise]);
+
   // Wochen-Tonnage über alle Workouts
   const weeklyTonnage = useMemo(() => {
     const byWeek = new Map<string, number>();
@@ -240,12 +265,14 @@ export function ProgressView({ ledger }: Props) {
   if (!effectiveExercise) {
     return (
       <div className="p-4">
-        <h1 className="text-3xl tracking-wider text-text font-display mb-4">Charts</h1>
-        <div className="text-center py-16 animate-fade-in">
+        <h1 className="text-3xl tracking-wider text-text font-display mb-4">Analyse</h1>
+        <MuscleAnalysis ledger={ledger} />
+        <div className="text-center py-10 animate-fade-in">
           <div className="w-16 h-16 brutal-card-sm flex items-center justify-center mx-auto mb-4" style={{ borderStyle: 'dashed' }}>
             <TrendingUp className="w-8 h-8 text-text-muted" />
           </div>
-          <p className="text-text-muted text-sm uppercase tracking-widest font-display">Keine Daten</p>
+          <p className="text-text-muted text-sm uppercase tracking-widest font-display">Noch keine Übungs-Charts</p>
+          <p className="text-[10px] text-text-muted font-mono mt-1">Logge ein paar Sessions für Verläufe pro Übung.</p>
         </div>
       </div>
     );
@@ -257,7 +284,65 @@ export function ProgressView({ ledger }: Props) {
 
   return (
     <div className="p-4">
-      <h1 className="text-3xl tracking-wider text-text font-display mb-4 animate-fade-in">Charts</h1>
+      <h1 className="text-3xl tracking-wider text-text font-display mb-4 animate-fade-in">Analyse</h1>
+
+      {/* Muskel-Tracking: Heatmap, Balance, Ø Sätze/Woche */}
+      <MuscleAnalysis ledger={ledger} />
+
+      {/* Gesamt-Kraftfortschritt: Ø e1RM-Zuwachs über alle Lifts */}
+      <div className="brutal-card-sm p-3 mb-4 animate-slide-up">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="w-4 h-4 text-accent" />
+            <h3 className="text-xs font-bold text-text font-display tracking-wider uppercase">Gesamtfortschritt</h3>
+          </div>
+          <div className="flex gap-1">
+            {[{ d: 90, l: '3M' }, { d: 365, l: '1J' }, { d: Infinity, l: 'Alles' }].map(o => (
+              <button key={o.l} onClick={() => setGrowthWindow(o.d)}
+                className={`brutal-chip px-2 py-0.5 text-[10px] ${growthWindow === o.d ? 'active' : ''}`}>{o.l}</button>
+            ))}
+          </div>
+        </div>
+        {growth.liftCount === 0 ? (
+          <p className="text-[11px] font-mono text-text-dim">Noch zu wenig Daten — mind. 2 Sessions pro Übung im Zeitraum nötig.</p>
+        ) : (
+          <>
+            <div className="flex items-baseline gap-2 mb-2">
+              <span className="text-4xl font-bold font-mono tabular-nums"
+                style={{ color: growth.avgPct >= 0 ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                {growth.avgPct >= 0 ? '+' : ''}{growth.avgPct.toFixed(1)}%
+              </span>
+              <span className="text-[10px] font-mono text-text-dim uppercase tracking-wider">
+                Ø e1RM · {growth.liftCount} {growth.liftCount === 1 ? 'Übung' : 'Übungen'}
+              </span>
+            </div>
+            <div className="space-y-1">
+              {growth.perLift.map(l => {
+                const mag = Math.min(Math.abs(l.pct), 50) / 50 * 100;
+                const pos = l.pct >= 0;
+                return (
+                  <div key={l.name} className="flex items-center gap-2 text-[11px] font-mono">
+                    <span className="text-text-dim flex-1 truncate">{l.name}</span>
+                    <div className="w-24 h-2.5 flex items-center justify-center relative border border-black flex-shrink-0"
+                      style={{ backgroundColor: 'var(--color-concrete)' }}>
+                      <div className="absolute top-0 bottom-0" style={{
+                        left: pos ? '50%' : `${50 - mag / 2}%`,
+                        width: `${mag / 2}%`,
+                        backgroundColor: pos ? 'var(--color-success)' : 'var(--color-danger)',
+                      }} />
+                      <div className="absolute top-0 bottom-0 w-px bg-black/60" style={{ left: '50%' }} />
+                    </div>
+                    <span className="w-14 text-right font-bold flex-shrink-0"
+                      style={{ color: pos ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                      {pos ? '+' : ''}{l.pct.toFixed(1)}%
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Übungsauswahl + Vergleich */}
       <div className="flex gap-2 mb-3 animate-slide-up stagger-1">
@@ -426,6 +511,53 @@ export function ProgressView({ ledger }: Props) {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Kraftstandard + Stagnation */}
+          {(strength || (stall && stall.stalling)) && (
+            <div className="grid gap-2 animate-slide-up"
+              style={{ gridTemplateColumns: strength && stall?.stalling ? '1fr 1fr' : '1fr' }}>
+              {strength && (
+                <div className="brutal-card-sm p-3" style={{ borderLeft: '4px solid var(--color-accent)' }}>
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <Award className="w-4 h-4 text-accent" />
+                    <span className="text-[10px] font-bold text-text-dim font-display tracking-wider uppercase">Kraftlevel</span>
+                  </div>
+                  <span className="block text-xl font-bold text-text font-display tracking-wide leading-none">
+                    {strength.label}
+                  </span>
+                  <span className="block text-[10px] text-text-muted font-mono mt-1">
+                    {strength.ratio}× Körpergewicht
+                    {strength.nextRatio != null && (
+                      <> · nächstes {STRENGTH_LEVELS[strength.index + 1]} ab {strength.nextRatio}×</>
+                    )}
+                  </span>
+                  {/* Level-Balken */}
+                  <div className="flex gap-0.5 mt-2">
+                    {STRENGTH_LEVELS.map((_, i) => (
+                      <div key={i} className="flex-1 h-1.5 border border-black"
+                        style={{ backgroundColor: i < strength.index ? 'var(--color-accent)' : 'var(--color-concrete)' }} />
+                    ))}
+                  </div>
+                </div>
+              )}
+              {stall && stall.stalling && (
+                <div className="brutal-card-sm p-3" style={{ borderLeft: '4px solid var(--color-warning)' }}>
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <AlertTriangle className="w-4 h-4 text-warning" />
+                    <span className="text-[10px] font-bold text-text-dim font-display tracking-wider uppercase">Stagnation</span>
+                  </div>
+                  <span className="block text-sm font-bold text-warning font-display tracking-wide leading-snug">
+                    {stall.sessionsFlat > 0
+                      ? `${stall.sessionsFlat} Sessions kein neuer Bestwert`
+                      : 'Kein neuer Bestwert zuletzt'}
+                  </span>
+                  <span className="block text-[10px] text-text-muted font-mono mt-1">
+                    Deload, Wdh.-Bereich ändern oder Technik prüfen.
+                  </span>
+                </div>
+              )}
             </div>
           )}
 

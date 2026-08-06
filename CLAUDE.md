@@ -24,7 +24,8 @@ npx serve dist       # Serve production build (for phone testing)
 ```
 src/
   main.tsx                              # Entry, SW registration
-  App.tsx                               # Shell: 5-tab nav (Start|Training|Übungen|Verlauf|Charts)
+  App.tsx                               # Shell: 5-tab nav (Start|Training|Analyse|Diät|Verlauf)
+                                        #   + Bibliothek- & Einstellungen-Overlays
   index.css                             # Brutalist design system, fonts, animations
   data/
     seedData.ts                         # 228 parsed CSV entries (v1 types + seed array)
@@ -33,7 +34,8 @@ src/
     exerciseLibrary.ts                  # Default exercise defs with primary/secondary muscles
   lib/
     storage.ts                          # LocalStorage keys, v1→v2 migration, JSON export/import
-    stats.ts                            # e1RM (Epley), volume, muscle stats, balance, PRs, trends
+    stats.ts                            # e1RM (Epley), volume, muscle stats, balance, PRs, trends,
+                                        #   suggestNextTarget (double progression), weeklySetsPerMuscle
   hooks/
     useLedger.ts                        # Central hook: all stores + CRUD (workouts, exercises,
                                         #   templates, body metrics), rename cascade
@@ -101,7 +103,11 @@ MetricEntry { id, date, metric: 'weight'|'waist'|'chest'|'arm'|'thigh', value }
 
 `lib/storage.ts:loadAll()` runs the idempotent v1→v2 migration on startup. Exercise names
 found in history/templates but missing from the library get defs with empty muscle lists
-(flagged in the UI for mapping). First visit seeds 228 CSV entries.
+(flagged in the UI for mapping). The app starts with an empty workout history
+(no auto-seed); default exercises + presets are always available. `resetAll()`
+(Settings → "Alle Daten zurücksetzen") wipes every key back to that clean state.
+`seedData.ts` still ships `EXERCISES_BY_TYPE` (preset exercise names) and the
+parsed `seedWorkouts` array, but the latter is no longer loaded on first visit.
 
 ### Muscle tracking semantics
 
@@ -130,13 +136,21 @@ neglected/underworked muscle warnings.
 - 4 quick stats (total, this week, week-streak, last workout label)
 - **Muscle heatmap**: front/back body SVG, intensity by weighted volume, time filter
   (Woche/4 Wochen/3 Monate), tap muscle for detail
+- **Ø sets/week per muscle**: weighted sets divided by range weeks, color-coded vs.
+  `WEEKLY_SET_TARGET` (≥10), plus a "hinkt hinterher" reminder listing muscles below target
 - **Balance analysis**: push/pull/legs/core volume bars, ratio + neglected-muscle warnings
 - **Body metrics**: weight/waist/chest/arm/thigh, per-metric chart + delta
 - 12-week activity grid, tier list (S/A/B/C by volume)
-- **Backup**: JSON export (download) / import (file picker) via settings icon
+- **Settings** (gear icon): **Routines** — bundle workouts into an ordered routine
+  (e.g. PPL); the active routine filters the Training workout picker. Plus JSON
+  **backup** export (download) / import (file picker)
 
 ### Training (TodayView)
-- Template picker (presets + custom, color-coded)
+- Template picker (presets + custom, color-coded); when a routine is active, only its
+  workouts are shown (in routine order), with a "Routine: <name>" label
+- **Last-session preview** per template: exercises in order with set counts + top weight
+- **Per-exercise target**: inline "Zuletzt" line + suggested weight×reps (double progression
+  via `suggestNextTarget`) with trend arrow; target values fill the set input placeholders
 - Session muscle preview chips (primary/secondary from library)
 - Countdown rest timer (60/90/120/180s), vibration on finish, progress bar
 - "Letztes Training laden" duplicates the last session of that template

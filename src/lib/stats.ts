@@ -1,6 +1,6 @@
 // Analytik-Kern: 1RM, Volumen, Muskel-Tracking, PRs, Trends
 
-import type { WorkoutEntry, ExerciseDef, SetEntry } from '../data/model';
+import type { WorkoutEntry, ExerciseDef, SetEntry, DietPhase, WorkoutTemplate } from '../data/model';
 import type { MuscleId, MuscleCategory } from '../data/muscles';
 import { MUSCLES, MUSCLE_BY_ID, ROLE_WEIGHT } from '../data/muscles';
 
@@ -220,4 +220,357 @@ export function linearTrend(values: number[]): number[] {
 
 export function round1(n: number): number {
   return Math.round(n * 10) / 10;
+}
+
+// ===== Ziel-Vorschlag (Double Progression) =====
+
+export interface SessionSets {
+  date: string;
+  sets: SetEntry[];
+}
+
+export interface TargetSuggestion {
+  weight: number;
+  reps: number;
+  basis: 'reps' | 'weight' | 'hold';  // Reps hoch / Gewicht hoch / halten
+  lastWeight: number;
+  lastReps: number;
+  lastRir?: number;                   // RIR des letzten Arbeitssatzes (falls erfasst)
+  lastSetCount: number;
+  trend: TrendDirection | null;
+}
+
+// Arbeitssatz einer Session = schwerster Satz; bei Gleichstand die meisten Reps
+function topSet(sets: SetEntry[]): { weight: number; reps: number; rir?: number } | null {
+  const valid = sets.filter(s => s.weight > 0 && s.reps > 0);
+  if (valid.length === 0) return null;
+  return valid.reduce((best, s) => {
+    if (s.weight > best.weight) return { weight: s.weight, reps: s.reps, rir: s.rir };
+    if (s.weight === best.weight && s.reps > best.reps) return { weight: s.weight, reps: s.reps, rir: s.rir };
+    return best;
+  }, { weight: 0, reps: 0, rir: undefined as number | undefined });
+}
+
+function loadIncrement(weight: number): number {
+  if (weight >= 100) return 5;
+  if (weight >= 20) return 2.5;
+  return 1.25;
+}
+
+// Erwartetes Gewicht/Wdh. fürs nächste Mal, abgeleitet aus dem eigenen Verlauf.
+// Prinzip Double Progression: erst Reps bis zum persönlichen Arbeits-Rep-Ziel
+// steigern, dann Gewicht erhöhen und Reps zurücksetzen. Bei Rückschritt: halten.
+export function suggestNextTarget(history: SessionSets[]): TargetSuggestion | null {
+  const sorted = [...history]
+    .filter(h => topSet(h.sets))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (sorted.length === 0) return null;
+
+  const last = sorted[sorted.length - 1];
+  const lastTop = topSet(last.sets)!;
+  const lastSetCount = last.sets.filter(s => s.weight > 0 && s.reps > 0).length;
+
+  // Arbeits-Rep-Ziel = gerundeter Schnitt der Top-Set-Reps der letzten 5 Sessions
+  const recent = sorted.slice(-5).map(h => topSet(h.sets)!.reps);
+  const repGoal = Math.max(1, Math.round(recent.reduce((a, b) => a + b, 0) / recent.length));
+
+  const trend = overloadTrend(sorted.map(h => ({ date: h.date, value: bestE1RM(h.sets) })));
+
+  let weight = lastTop.weight;
+  let reps = lastTop.reps;
+  let basis: TargetSuggestion['basis'];
+
+  if (trend?.direction === 'down') {
+    // Formkurve zeigt nach unten → gleiche Vorgabe konsolidieren
+    basis = 'hold';
+  } else if (lastTop.reps >= repGoal) {
+    // Rep-Ziel erreicht → Gewicht rauf, Reps aufs Ziel zurück
+    weight = round1(lastTop.weight + loadIncrement(lastTop.weight));
+    reps = repGoal;
+    basis = 'weight';
+  } else {
+    // Noch Luft nach oben bei den Reps → eine Wiederholung mehr
+    reps = lastTop.reps + 1;
+    basis = 'reps';
+  }
+
+  return {
+    weight, reps, basis,
+    lastWeight: lastTop.weight,
+    lastReps: lastTop.reps,
+    lastRir: lastTop.rir,
+    lastSetCount,
+    trend: trend?.direction ?? null,
+  };
+}
+
+// ===== Wöchentliche Satzbelastung pro Muskel =====
+
+// Evidenzbasierte Untergrenze fürs Muskelwachstum: ~10 gewichtete Sätze/Woche.
+export const WEEKLY_SET_TARGET = 10;
+
+export interface WeeklyMuscleLoad {
+  muscle: MuscleId;
+  perWeek: number;               // gewichtete Sätze pro Woche
+  status: 'ok' | 'low' | 'none';
+}
+
+export function weeklySetsPerMuscle(stats: MuscleStatsMap, rangeDays: number): WeeklyMuscleLoad[] {
+  const weeks = Math.max(rangeDays / 7, 1);
+  return MUSCLES.map(m => {
+    const perWeek = stats[m.id].weightedSets / weeks;
+    const status: WeeklyMuscleLoad['status'] =
+      perWeek <= 0 ? 'none' : perWeek >= WEEKLY_SET_TARGET ? 'ok' : 'low';
+    return { muscle: m.id, perWeek, status };
+  });
+}
+
+// ===== Diätphasen-Fortschritt =====
+
+export interface WeightPoint { date: string; value: number; }
+
+export interface DietPhaseProgress {
+  active: boolean;
+  startWeight: number | null;
+  currentWeight: number | null;
+  delta: number;                 // aktuell − Start (kg)
+  days: number;                  // Start bis heute/Ende
+  ratePerWeek: number;           // kg/Woche
+  target: number | null;
+  remaining: number | null;      // Ziel − aktuell (kg, vorzeichenbehaftet)
+  onTrack: boolean | null;       // Richtung passt zum Phasenziel
+}
+
+function daysBetween(a: string, b: string): number {
+  return Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
+}
+
+// Fortschritt einer Phase aus den Gewichtseinträgen im Zeitraum.
+// weightPoints muss aufsteigend nach Datum sortiert sein.
+export function dietPhaseProgress(
+  phase: DietPhase,
+  weightPoints: WeightPoint[],
+  today: string,
+): DietPhaseProgress {
+  const active = phase.startDate <= today && (!phase.endDate || phase.endDate >= today);
+  const endRef = phase.endDate && phase.endDate < today ? phase.endDate : today;
+
+  const inRange = weightPoints.filter(p =>
+    p.date >= phase.startDate && p.date <= (phase.endDate ?? today)
+  );
+  const startWeight = inRange.length ? inRange[0].value : null;
+  const currentWeight = inRange.length ? inRange[inRange.length - 1].value : null;
+  const delta = startWeight !== null && currentWeight !== null ? round1(currentWeight - startWeight) : 0;
+
+  const days = Math.max(daysBetween(phase.startDate, endRef), 0);
+  const weeks = Math.max(days / 7, 1 / 7);
+  const ratePerWeek = round1(delta / weeks);
+
+  const target = phase.targetWeight ?? null;
+  const remaining = target !== null && currentWeight !== null ? round1(target - currentWeight) : null;
+
+  let onTrack: boolean | null = null;
+  if (startWeight !== null && currentWeight !== null) {
+    if (phase.type === 'cut') onTrack = delta < 0;
+    else if (phase.type === 'bulk') onTrack = delta > 0;
+    else onTrack = Math.abs(ratePerWeek) <= 0.25;
+  }
+
+  return { active, startWeight, currentWeight, delta, days, ratePerWeek, target, remaining, onTrack };
+}
+
+// ===== Gewichtstrend geglättet + Rate =====
+
+// Gleitender Mittelwert über die letzten `windowDays` Tage je Punkt.
+// weightPoints aufsteigend sortiert. Liefert eine geglättete Reihe.
+export function movingAverage(points: WeightPoint[], windowDays = 7): WeightPoint[] {
+  return points.map((p, i) => {
+    let sum = 0, n = 0;
+    for (let j = i; j >= 0; j--) {
+      if (daysBetween(points[j].date, p.date) > windowDays) break;
+      sum += points[j].value; n++;
+    }
+    return { date: p.date, value: round1(sum / n) };
+  });
+}
+
+// Trend-Rate in kg/Woche aus linearer Regression über die letzten `days`.
+export function weightTrendRate(points: WeightPoint[], days = 21): number | null {
+  if (points.length < 2) return null;
+  const last = points[points.length - 1].date;
+  const win = points.filter(p => daysBetween(p.date, last) <= days);
+  if (win.length < 2) return null;
+  const x0 = Date.parse(win[0].date);
+  const xs = win.map(p => (Date.parse(p.date) - x0) / 86400000);  // Tage
+  const ys = win.map(p => p.value);
+  const n = xs.length;
+  const sx = xs.reduce((a, b) => a + b, 0), sy = ys.reduce((a, b) => a + b, 0);
+  const sxy = xs.reduce((a, x, i) => a + x * ys[i], 0);
+  const sxx = xs.reduce((a, x) => a + x * x, 0);
+  const denom = n * sxx - sx * sx;
+  if (denom === 0) return null;
+  const slopePerDay = (n * sxy - sx * sy) / denom;
+  return round1(slopePerDay * 7);
+}
+
+// ===== Kalorienbedarf =====
+
+// Grundumsatz nach Mifflin-St Jeor × Aktivitätsfaktor → Erhaltungskalorien.
+export function mifflinTDEE(weightKg: number, heightCm: number, age: number,
+    sex: 'm' | 'f', activity: number): number {
+  const bmr = 10 * weightKg + 6.25 * heightCm - 5 * age + (sex === 'm' ? 5 : -161);
+  return Math.round(bmr * activity);
+}
+
+// Adaptiver TDEE aus tatsächlicher Kalorienzufuhr + Gewichtsänderung.
+// Energiebilanz: TDEE = Ø Zufuhr − (Gewichtsänderung × 7700 / Tage).
+// Braucht genug Daten (≥ 10 Tage Spanne, ≥ 7 Kalorien-Einträge, ≥ 3 Gewichte).
+export function adaptiveTDEE(
+  weightPoints: WeightPoint[],
+  intake: { date: string; kcal: number }[],
+  days = 21,
+): number | null {
+  if (weightPoints.length < 3 || intake.length < 7) return null;
+  const lastDate = weightPoints[weightPoints.length - 1].date;
+  const w = weightPoints.filter(p => daysBetween(p.date, lastDate) <= days);
+  const cal = intake.filter(p => daysBetween(p.date, lastDate) <= days && p.kcal > 0);
+  if (w.length < 3 || cal.length < 7) return null;
+  const spanDays = daysBetween(w[0].date, w[w.length - 1].date);
+  if (spanDays < 10) return null;
+
+  const avgIntake = cal.reduce((a, p) => a + p.kcal, 0) / cal.length;
+  const slopePerWeek = weightTrendRate(w, days);
+  if (slopePerWeek === null) return null;
+  const kgPerDay = slopePerWeek / 7;
+  const tdee = avgIntake - kgPerDay * 7700;
+  return Math.round(tdee);
+}
+
+// ===== Kraftstandards (grobe Einordnung via 1RM/Körpergewicht) =====
+
+export const STRENGTH_LEVELS = ['Untrainiert', 'Anfänger', 'Novize', 'Fortgeschritten', 'Stark', 'Elite'];
+
+// Schwellen als Vielfache des Körpergewichts fürs 1RM, je Übung + Geschlecht.
+const STRENGTH_STANDARDS: { match: RegExp; m: number[]; f: number[] }[] = [
+  { match: /bench|bank/i,               m: [0.5, 0.75, 1.25, 1.75, 2.0], f: [0.3, 0.5, 0.75, 1.0, 1.3] },
+  { match: /squat|kniebeuge|hex/i,      m: [0.75, 1.25, 1.75, 2.5, 3.0], f: [0.5, 0.9, 1.3, 1.8, 2.2] },
+  { match: /deadlift|kreuzheben|sldl/i, m: [1.0, 1.5, 2.0, 2.75, 3.25],  f: [0.6, 1.0, 1.5, 2.0, 2.5] },
+  { match: /ohp|overhead|shoulder|schulterdr|military/i, m: [0.35, 0.55, 0.8, 1.1, 1.4], f: [0.2, 0.35, 0.5, 0.75, 1.0] },
+  { match: /row|rudern/i,               m: [0.5, 0.75, 1.0, 1.4, 1.75],  f: [0.35, 0.55, 0.75, 1.0, 1.3] },
+];
+
+export interface StrengthLevel {
+  index: number;          // 0..5 (0 = untrainiert)
+  label: string;
+  ratio: number;          // aktuelles 1RM/KG
+  nextRatio: number | null;
+}
+
+export function strengthLevel(exerciseName: string, bestE1RM: number, bodyweightKg: number,
+    sex: 'm' | 'f'): StrengthLevel | null {
+  if (bestE1RM <= 0 || bodyweightKg <= 0) return null;
+  const std = STRENGTH_STANDARDS.find(s => s.match.test(exerciseName));
+  if (!std) return null;
+  const thresholds = sex === 'm' ? std.m : std.f;
+  const ratio = bestE1RM / bodyweightKg;
+  let idx = 0;
+  for (let i = 0; i < thresholds.length; i++) if (ratio >= thresholds[i]) idx = i + 1;
+  return {
+    index: idx,
+    label: STRENGTH_LEVELS[idx],
+    ratio: round1(ratio),
+    nextRatio: idx < thresholds.length ? thresholds[idx] : null,
+  };
+}
+
+// ===== Nächstes Routine-Workout ("Heute/Als Nächstes dran") =====
+
+// Wählt in einer Routine das Workout nach dem zuletzt trainierten (in Reihenfolge,
+// zyklisch). Gemeinsame Logik für Startseite und Training-Voreinstellung.
+export function nextUpTemplateId(
+  routine: { templateIds: string[] } | null | undefined,
+  templates: WorkoutTemplate[],
+  workouts: WorkoutEntry[],
+): string | null {
+  if (!routine || routine.templateIds.length === 0) return null;
+  const tpls = routine.templateIds
+    .map(id => templates.find(t => t.id === id))
+    .filter((t): t is WorkoutTemplate => !!t);
+  if (tpls.length === 0) return null;
+  const belongs = (w: WorkoutEntry, tpl: WorkoutTemplate) =>
+    w.templateId === tpl.id || (!!tpl.preset && w.type === tpl.preset);
+  let lastPos = -1, lastDate = '';
+  for (const w of workouts) {
+    const idx = tpls.findIndex(t => belongs(w, t));
+    if (idx >= 0 && w.date >= lastDate) { lastDate = w.date; lastPos = idx; }
+  }
+  return tpls[lastPos < 0 ? 0 : (lastPos + 1) % tpls.length].id;
+}
+
+// ===== Gesamt-Kraftfortschritt über alle Lifts =====
+
+export interface LiftGrowth {
+  name: string;
+  startE1RM: number;
+  endE1RM: number;
+  pct: number;        // prozentuale Veränderung im Zeitraum
+  sessions: number;
+}
+export interface OverallGrowth {
+  avgPct: number;         // Durchschnitt über alle qualifizierten Übungen
+  liftCount: number;
+  perLift: LiftGrowth[];   // nach pct absteigend
+}
+
+// Für jede Übung: e1RM der ersten vs. letzten Session im Zeitraum (min. 2 Sessions).
+// Headline = Durchschnitt der prozentualen Zuwächse über alle Übungen.
+export function overallStrengthGrowth(workouts: WorkoutEntry[], sinceDays: number): OverallGrowth {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - sinceDays);
+  const cutoffStr = isFinite(sinceDays) ? cutoff.toISOString().split('T')[0] : '0000-01-01';
+
+  // Übung → [{date, e1rm}] (bestes e1RM je Session im Zeitraum)
+  const byEx = new Map<string, { date: string; e1rm: number }[]>();
+  for (const w of workouts) {
+    if (w.date < cutoffStr) continue;
+    for (const ex of w.exercises) {
+      const best = bestE1RM(ex.sets);
+      if (best <= 0) continue;
+      if (!byEx.has(ex.name)) byEx.set(ex.name, []);
+      byEx.get(ex.name)!.push({ date: w.date, e1rm: best });
+    }
+  }
+
+  const perLift: LiftGrowth[] = [];
+  for (const [name, pts] of byEx) {
+    const sorted = pts.sort((a, b) => a.date.localeCompare(b.date));
+    if (sorted.length < 2) continue;
+    const start = sorted[0].e1rm;
+    const end = sorted[sorted.length - 1].e1rm;
+    if (start <= 0) continue;
+    perLift.push({ name, startE1RM: start, endE1RM: end, pct: ((end - start) / start) * 100, sessions: sorted.length });
+  }
+  perLift.sort((a, b) => b.pct - a.pct);
+  const avgPct = perLift.length ? perLift.reduce((s, l) => s + l.pct, 0) / perLift.length : 0;
+  return { avgPct, liftCount: perLift.length, perLift };
+}
+
+// ===== Stagnations-Erkennung =====
+
+export interface StallInfo { stalling: boolean; sessionsFlat: number; }
+
+// Kein neuer e1RM-Höchstwert in den letzten `recent` Sessions → Stagnation.
+export function detectStall(e1rmByDate: { date: string; value: number }[], recent = 4): StallInfo {
+  const sorted = [...e1rmByDate].filter(p => p.value > 0).sort((a, b) => a.date.localeCompare(b.date));
+  if (sorted.length < recent + 2) return { stalling: false, sessionsFlat: 0 };
+  const peakBefore = Math.max(...sorted.slice(0, -recent).map(p => p.value));
+  const recentPeak = Math.max(...sorted.slice(-recent).map(p => p.value));
+  // wie viele Sessions am Ende ohne neuen Allzeit-Höchstwert
+  const overall = Math.max(...sorted.map(p => p.value));
+  let run = 0;
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    if (sorted[i].value >= overall - 0.01) break;
+    run++;
+  }
+  return { stalling: recentPeak <= peakBefore + 0.01, sessionsFlat: run };
 }

@@ -1,9 +1,10 @@
-const CACHE = 'iron-ledger-v2';
+const CACHE = 'iron-ledger-v16';
+// Relativ zur SW-Position (…/iron-ledger/sw.js) — funktioniert im Unterpfad wie lokal
 const ASSETS = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/favicon.svg',
+  './',
+  './index.html',
+  './manifest.json',
+  './favicon.svg',
 ];
 
 self.addEventListener('install', (e) => {

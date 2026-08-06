@@ -2,8 +2,8 @@
 // Wird einmal in App.tsx instanziiert und per Props weitergereicht.
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import type { WorkoutEntry, ExerciseDef, WorkoutTemplate } from '../data/model';
-import type { MetricEntry, MetricId } from '../lib/storage';
+import type { WorkoutEntry, ExerciseDef, WorkoutTemplate, DietPhase, Routine, Settings } from '../data/model';
+import type { MetricEntry, MetricId, NutritionEntry } from '../lib/storage';
 import { loadAll, writeJSON, KEYS } from '../lib/storage';
 
 export function useLedger() {
@@ -11,6 +11,10 @@ export function useLedger() {
   const [exercises, setExercises] = useState<ExerciseDef[]>([]);
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
   const [metrics, setMetrics] = useState<MetricEntry[]>([]);
+  const [dietPhases, setDietPhases] = useState<DietPhase[]>([]);
+  const [routines, setRoutines] = useState<Routine[]>([]);
+  const [settings, setSettings] = useState<Settings>({});
+  const [nutrition, setNutrition] = useState<NutritionEntry[]>([]);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -19,6 +23,10 @@ export function useLedger() {
     setExercises(data.exercises);
     setTemplates(data.templates);
     setMetrics(data.metrics);
+    setDietPhases(data.dietPhases);
+    setRoutines(data.routines);
+    setSettings(data.settings);
+    setNutrition(data.nutrition);
     setReady(true);
   }, []);
 
@@ -28,6 +36,10 @@ export function useLedger() {
     setExercises(data.exercises);
     setTemplates(data.templates);
     setMetrics(data.metrics);
+    setDietPhases(data.dietPhases);
+    setRoutines(data.routines);
+    setSettings(data.settings);
+    setNutrition(data.nutrition);
   }, []);
 
   // ===== Workouts =====
@@ -125,6 +137,12 @@ export function useLedger() {
       writeJSON(KEYS.templates, updated);
       return updated;
     });
+    // aus allen Routinen entfernen
+    setRoutines(prev => {
+      const next = prev.map(r => ({ ...r, templateIds: r.templateIds.filter(tid => tid !== id) }));
+      writeJSON(KEYS.routines, next);
+      return next;
+    });
   }, []);
 
   // ===== Körpermetriken =====
@@ -153,6 +171,114 @@ export function useLedger() {
     });
   }, []);
 
+  // ===== Diätphasen =====
+
+  const addDietPhase = useCallback((phase: Omit<DietPhase, 'id'>): DietPhase => {
+    const created: DietPhase = { ...phase, id: crypto.randomUUID() };
+    setDietPhases(prev => {
+      const updated = [...prev, created].sort((a, b) => b.startDate.localeCompare(a.startDate));
+      writeJSON(KEYS.dietPhases, updated);
+      return updated;
+    });
+    return created;
+  }, []);
+
+  const updateDietPhase = useCallback((id: string, patch: Partial<Omit<DietPhase, 'id'>>) => {
+    setDietPhases(prev => {
+      const updated = prev
+        .map(p => (p.id === id ? { ...p, ...patch } : p))
+        .sort((a, b) => b.startDate.localeCompare(a.startDate));
+      writeJSON(KEYS.dietPhases, updated);
+      return updated;
+    });
+  }, []);
+
+  const deleteDietPhase = useCallback((id: string) => {
+    setDietPhases(prev => {
+      const updated = prev.filter(p => p.id !== id);
+      writeJSON(KEYS.dietPhases, updated);
+      return updated;
+    });
+  }, []);
+
+  // ===== Routinen + aktive Routine =====
+
+  const addRoutine = useCallback((routine: Omit<Routine, 'id'>): Routine => {
+    const created: Routine = { ...routine, id: crypto.randomUUID() };
+    setRoutines(prev => {
+      const updated = [...prev, created];
+      writeJSON(KEYS.routines, updated);
+      return updated;
+    });
+    return created;
+  }, []);
+
+  const updateRoutine = useCallback((id: string, patch: Partial<Omit<Routine, 'id'>>) => {
+    setRoutines(prev => {
+      const updated = prev.map(r => (r.id === id ? { ...r, ...patch } : r));
+      writeJSON(KEYS.routines, updated);
+      return updated;
+    });
+  }, []);
+
+  const deleteRoutine = useCallback((id: string) => {
+    setRoutines(prev => {
+      const updated = prev.filter(r => r.id !== id);
+      writeJSON(KEYS.routines, updated);
+      return updated;
+    });
+    // war es die aktive Routine? → Auswahl zurücksetzen
+    setSettings(prev => {
+      if (prev.activeRoutineId !== id) return prev;
+      const next = { ...prev, activeRoutineId: undefined };
+      writeJSON(KEYS.settings, next);
+      return next;
+    });
+  }, []);
+
+  const setActiveRoutineId = useCallback((id: string | undefined) => {
+    setSettings(prev => {
+      const next = { ...prev, activeRoutineId: id };
+      writeJSON(KEYS.settings, next);
+      return next;
+    });
+  }, []);
+
+  // Generisches Settings-Update (Timer, Profil …)
+  const updateSettings = useCallback((patch: Partial<Settings>) => {
+    setSettings(prev => {
+      const next = { ...prev, ...patch };
+      writeJSON(KEYS.settings, next);
+      return next;
+    });
+  }, []);
+
+  // ===== Kalorien-/Protein-Log (ein Eintrag pro Tag) =====
+
+  const addNutrition = useCallback((date: string, kcal: number, protein?: number, burned?: number) => {
+    setNutrition(prev => {
+      const idx = prev.findIndex(e => e.date === date);
+      let updated: NutritionEntry[];
+      if (idx >= 0) {
+        updated = [...prev];
+        updated[idx] = { ...updated[idx], kcal, protein, burned };
+      } else {
+        updated = [{ id: crypto.randomUUID(), date, kcal, protein, burned }, ...prev];
+      }
+      updated.sort((a, b) => b.date.localeCompare(a.date));
+      writeJSON(KEYS.nutrition, updated);
+      return updated;
+    });
+  }, []);
+
+  const deleteNutrition = useCallback((id: string) => {
+    setNutrition(prev => {
+      const updated = prev.filter(e => e.id !== id);
+      writeJSON(KEYS.nutrition, updated);
+      return updated;
+    });
+  }, []);
+
   // ===== Abgeleitete Lookups =====
 
   const exercisesByName = useMemo(() => {
@@ -167,6 +293,10 @@ export function useLedger() {
     exercises, exercisesByName, addExercise, updateExercise, deleteExercise,
     templates, addTemplate, updateTemplate, deleteTemplate,
     metrics, addMetric, deleteMetric,
+    dietPhases, addDietPhase, updateDietPhase, deleteDietPhase,
+    routines, addRoutine, updateRoutine, deleteRoutine,
+    settings, setActiveRoutineId, updateSettings,
+    nutrition, addNutrition, deleteNutrition,
   };
 }
 

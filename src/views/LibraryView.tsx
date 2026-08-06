@@ -5,7 +5,7 @@
 import { useMemo, useState } from 'react';
 import {
   BookOpen, Plus, Pencil, Trash2, X, Check, ChevronUp, ChevronDown,
-  Dumbbell, AlertTriangle, Layers,
+  Dumbbell, AlertTriangle, Layers, ArrowLeft,
 } from 'lucide-react';
 import type { ExerciseDef, Equipment } from '../data/model';
 import { EQUIPMENT_LABELS, TEMPLATE_COLOR_CHOICES } from '../data/model';
@@ -15,6 +15,7 @@ import type { Ledger } from '../hooks/useLedger';
 
 interface Props {
   ledger: Ledger;
+  onClose?: () => void;   // als Vollbild-Overlay: Zurück-Pfeil im Header zeigen
 }
 
 // ===== Muskel-Chips (Anzeige) =====
@@ -172,7 +173,8 @@ function TemplateEditor({ tpl, exercises, onSave, onCancel }: {
     });
   };
 
-  const valid = name.trim().length > 0 && selected.length > 0;
+  // Leeres Workout ist erlaubt — Übungen kommen beim Training dazu und bleiben erhalten
+  const valid = name.trim().length > 0;
 
   return (
     <div className="brutal-card-inset p-3 mt-2 space-y-3 animate-slide-up">
@@ -251,7 +253,7 @@ function TemplateEditor({ tpl, exercises, onSave, onCancel }: {
 
 // ===== Hauptview =====
 
-export function LibraryView({ ledger }: Props) {
+export function LibraryView({ ledger, onClose }: Props) {
   const { exercises, templates, addExercise, updateExercise, deleteExercise,
     addTemplate, updateTemplate, deleteTemplate, workouts } = ledger;
 
@@ -283,14 +285,19 @@ export function LibraryView({ ledger }: Props) {
 
   return (
     <div className="p-4">
-      <div className="flex items-center justify-between mb-4 animate-fade-in">
-        <div>
-          <h1 className="text-3xl tracking-wider text-text font-display">Bibliothek</h1>
+      <div className="flex items-center gap-3 mb-4 animate-fade-in">
+        {onClose && (
+          <button onClick={onClose} className="brutal-chip px-2.5 py-2 flex-shrink-0" aria-label="Zurück">
+            <ArrowLeft className="w-4 h-4" />
+          </button>
+        )}
+        <div className="flex-1 min-w-0">
+          <h1 className="text-3xl tracking-wider text-text font-display leading-none">Bibliothek</h1>
           <p className="text-xs text-text-dim uppercase tracking-widest font-mono">
             {exercises.length} Übungen · {templates.length} Workouts
           </p>
         </div>
-        <BookOpen className="w-8 h-8 text-accent" />
+        <BookOpen className="w-8 h-8 text-accent flex-shrink-0" />
       </div>
 
       <div className="flex gap-2 mb-4">

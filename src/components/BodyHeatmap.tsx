@@ -19,11 +19,13 @@ interface Zone {
 const FRONT_ZONES: Zone[] = [
   { muscle: 'front_delts', paths: ['M31 26 L38 24 L38 32 L31 34 Z', 'M69 26 L62 24 L62 32 L69 34 Z'] },
   { muscle: 'side_delts', paths: ['M24 28 L31 26 L31 36 L24 38 Z', 'M76 28 L69 26 L69 36 L76 38 Z'] },
-  { muscle: 'chest', paths: ['M38 26 L62 26 L64 42 L50 48 L36 42 Z'] },
+  { muscle: 'upper_chest', paths: ['M38 26 L62 26 L63 34 L50 37 L37 34 Z'] },
+  { muscle: 'chest', paths: ['M37 34 L63 34 L64 42 L50 48 L36 42 Z'] },
   { muscle: 'biceps', paths: ['M25 40 L32 38 L32 52 L25 54 Z', 'M75 40 L68 38 L68 52 L75 54 Z'] },
   { muscle: 'forearms', paths: ['M23 57 L30 55 L28 71 L21 69 Z', 'M77 57 L70 55 L72 71 L79 69 Z'] },
   { muscle: 'abs', paths: ['M42 50 L58 50 L57 74 L50 78 L43 74 Z'] },
   { muscle: 'quads', paths: ['M38 82 L48 82 L47 110 L40 114 Z', 'M52 82 L62 82 L60 114 L53 110 Z'] },
+  { muscle: 'adductors', paths: ['M47 83 L50 83 L49 104 L47 104 Z', 'M50 83 L53 83 L53 104 L51 104 Z'] },
   { muscle: 'calves', paths: ['M40 120 L46 118 L45 142 L41 142 Z', 'M60 120 L54 118 L55 142 L59 142 Z'] },
 ];
 
@@ -35,6 +37,7 @@ const BACK_ZONES: Zone[] = [
   { muscle: 'lower_back', paths: ['M44 62 L56 62 L55 76 L50 80 L45 76 Z'] },
   { muscle: 'triceps', paths: ['M24 40 L31 38 L31 53 L24 55 Z', 'M76 40 L69 38 L69 53 L76 55 Z'] },
   { muscle: 'glutes', paths: ['M40 82 L60 82 L61 96 L50 100 L39 96 Z'] },
+  { muscle: 'abductors', paths: ['M33 82 L39 83 L39 93 L34 91 Z', 'M67 82 L61 83 L61 93 L66 91 Z'] },
   { muscle: 'hamstrings', paths: ['M39 100 L48 102 L47 120 L40 122 Z', 'M61 100 L52 102 L53 120 L60 122 Z'] },
   { muscle: 'calves', paths: ['M40 126 L47 124 L46 146 L41 146 Z', 'M60 126 L53 124 L54 146 L59 146 Z'] },
 ];

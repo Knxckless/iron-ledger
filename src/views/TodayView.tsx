@@ -4,17 +4,30 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Save, Plus, X, Dumbbell, ChevronDown, ChevronUp, Timer,
-  Copy, Trophy, Pause, Play, RotateCcw,
+  Copy, Trophy, Pause, Play, RotateCcw, ClipboardList, TrendingUp, TrendingDown, Minus, Target, ListChecks,
+  Check, Circle, StickyNote, Repeat, BookOpen,
 } from 'lucide-react';
 import type { WorkoutEntry, ExerciseEntry, WorkoutTemplate } from '../data/model';
 import { MUSCLE_BY_ID } from '../data/muscles';
 import type { MuscleId } from '../data/muscles';
-import { detectNewPRs, round1 } from '../lib/stats';
-import type { NewPR } from '../lib/stats';
+import { detectNewPRs, round1, suggestNextTarget, nextUpTemplateId } from '../lib/stats';
+import type { NewPR, TargetSuggestion } from '../lib/stats';
 import type { Ledger } from '../hooks/useLedger';
+import { readJSON, writeJSON, KEYS } from '../lib/storage';
+
+// Laufendes, noch nicht gespeichertes Training (übersteht Tab-Wechsel + App-Schließen)
+interface WorkoutDraft {
+  templateId: string;
+  session: ExerciseEntry[];
+  activeIdx: number | null;
+  doneIdx: number[];
+  savedAt: number;
+}
 
 interface Props {
   ledger: Ledger;
+  initialTemplateId?: string;   // von "Heute dran" auf Start: dieses Workout vorwählen
+  onOpenLibrary?: () => void;   // Übungs-/Workout-Bibliothek als Overlay öffnen
 }
 
 const TIMER_PRESETS = [60, 90, 120, 180];
@@ -23,39 +36,236 @@ function emptySets(): ExerciseEntry['sets'] {
   return [{ weight: 0, reps: 0, notes: '' }];
 }
 
+// Kommazahlen zulassen: "7,5" und "7.5" → 7.5; leer/ungültig → 0
+function parseDec(v: string): number {
+  const n = parseFloat(v.replace(',', '.'));
+  return isNaN(n) ? 0 : n;
+}
+
+// Zahl mit deutschem Komma anzeigen (7.5 → "7,5")
+function fmtNum(n: number): string {
+  return String(n).replace('.', ',');
+}
+
+// Gehört ein Workout-Eintrag zu diesem Template? (custom via id, Preset via typ)
+function belongsTo(w: WorkoutEntry, tpl: WorkoutTemplate): boolean {
+  return w.templateId === tpl.id || (!!tpl.preset && w.type === tpl.preset);
+}
+
 // ===== Pausentimer (Countdown) =====
 
-function RestTimer() {
+function RestTimer({ defaultSec, autoStart, onToggleAutoStart, startSignal, stopSignal }: {
+  defaultSec: number;
+  autoStart: boolean;
+  onToggleAutoStart: (v: boolean) => void;
+  startSignal: number;
+  stopSignal: number;
+}) {
   const [visible, setVisible] = useState(false);
-  const [duration, setDuration] = useState(90);
-  const [remaining, setRemaining] = useState(90);
+  const [duration, setDuration] = useState(defaultSec);
+  const [remaining, setRemaining] = useState(defaultSec);
   const [running, setRunning] = useState(false);
   const endRef = useRef(0);
+  const audioRef = useRef<AudioContext | null>(null);
+  const wakeRef = useRef<WakeLockSentinel | null>(null);
+  const firedRef = useRef(false);
+  const scheduledRef = useRef<OscillatorNode[]>([]);   // vorgeplante Alarm-Töne
+  const keepAliveRef = useRef<{ osc: OscillatorNode; gain: GainNode } | null>(null);
+
+  // Timer-Zustand über Reloads hinweg merken (Endzeit + Dauer). Damit ein noch
+  // laufender Timer nach Neuladen/Zurückkommen weiterläuft statt bei 0 zu stehen.
+  const REST_KEY = 'iron-ledger-rest-timer';
+  const persistTimer = (end: number, dur: number) => {
+    try { localStorage.setItem(REST_KEY, JSON.stringify({ end, duration: dur })); } catch { /* ignore */ }
+  };
+  const clearTimer = () => { try { localStorage.removeItem(REST_KEY); } catch { /* ignore */ } };
+
+  // Beim Laden: lief noch ein Timer? Dann fortsetzen (kein Alarm, wenn schon vorbei).
+  useEffect(() => {
+    const raw = localStorage.getItem(REST_KEY);
+    if (!raw) return;
+    try {
+      const { end, duration: d } = JSON.parse(raw) as { end: number; duration: number };
+      const left = Math.round((end - Date.now()) / 1000);
+      if (left > 0) {
+        setVisible(true); setDuration(d); setRemaining(left);
+        endRef.current = end; setRunning(true);
+      } else {
+        clearTimer();
+      }
+    } catch { clearTimer(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Audio-Kontext auf Nutzergeste anlegen/entsperren (nötig fürs Piepen)
+  const ensureAudio = () => {
+    if (!audioRef.current) {
+      const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (AC) audioRef.current = new AC();
+    }
+    if (audioRef.current?.state === 'suspended') void audioRef.current.resume();
+    return audioRef.current;
+  };
+
+  // Keepalive: ein praktisch stummer Dauerton hält den Audio-Kontext auch im
+  // Hintergrund/bei gesperrtem Bildschirm aktiv, damit der vorgeplante Alarm feuert.
+  // Web-Audio mischt sich unter laufende Musik, statt sie zu pausieren.
+  const startKeepAlive = () => {
+    const ctx = audioRef.current;
+    if (!ctx || keepAliveRef.current) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 40;
+    gain.gain.value = 0.0004;   // unhörbar, aber != 0 → Hardware bleibt wach
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start();
+    keepAliveRef.current = { osc, gain };
+  };
+  const stopKeepAlive = () => {
+    try { keepAliveRef.current?.osc.stop(); keepAliveRef.current?.osc.disconnect(); } catch { /* ignore */ }
+    keepAliveRef.current = null;
+  };
+
+  // Lauten, durchdringenden Alarm exakt auf die Endzeit der Audio-Uhr einplanen.
+  // Feuert auch, wenn die JS-Timer im Hintergrund gedrosselt werden.
+  const cancelAlarm = () => {
+    scheduledRef.current.forEach(osc => { try { osc.stop(); osc.disconnect(); } catch { /* ignore */ } });
+    scheduledRef.current = [];
+  };
+  const scheduleAlarm = (atTime: number) => {
+    const ctx = audioRef.current;
+    if (!ctx) return;
+    cancelAlarm();
+    const pattern = [0, 0.34, 0.68, 1.02, 1.44];   // 5 Beeps, letzter höher/länger
+    pattern.forEach((t, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = i === pattern.length - 1 ? 1560 : 1040;
+      const st = atTime + t;
+      const len = i === pattern.length - 1 ? 0.5 : 0.26;
+      gain.gain.setValueAtTime(0.0001, st);
+      gain.gain.exponentialRampToValueAtTime(1.0, st + 0.015);   // laut
+      gain.gain.setValueAtTime(1.0, st + len - 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.0001, st + len);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(st); osc.stop(st + len + 0.02);
+      scheduledRef.current.push(osc);
+    });
+  };
+
+  const notify = () => {
+    try {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('Pause vorbei 💪', { body: 'GO! Nächster Satz.', tag: 'rest-timer' });
+      }
+    } catch { /* ignore */ }
+  };
+
+  // Wake Lock: Bildschirm bleibt während der Pause an (damit Ton/Vibration sicher feuern)
+  const acquireWake = async () => {
+    try {
+      if ('wakeLock' in navigator && !wakeRef.current) {
+        wakeRef.current = await navigator.wakeLock.request('screen');
+      }
+    } catch { /* ignore */ }
+  };
+  const releaseWake = () => {
+    try { void wakeRef.current?.release(); } catch { /* ignore */ }
+    wakeRef.current = null;
+  };
 
   useEffect(() => {
     if (!running) return;
+    firedRef.current = false;
     const tick = window.setInterval(() => {
       const left = Math.max(0, Math.round((endRef.current - Date.now()) / 1000));
       setRemaining(left);
-      if (left === 0) {
+      if (left === 0 && !firedRef.current) {
+        firedRef.current = true;
         setRunning(false);
-        if ('vibrate' in navigator) navigator.vibrate([200, 100, 200, 100, 400]);
+        clearTimer();
+        // Ton kommt aus dem vorgeplanten Alarm (feuert auch im Hintergrund);
+        // Vibration + Notification sind ergänzende Best-Effort-Signale.
+        navigator.vibrate?.([300, 120, 300, 120, 500]);
+        notify();
+        stopKeepAlive();
+        releaseWake();
       }
     }, 250);
     return () => clearInterval(tick);
   }, [running]);
 
+  // Wake Lock nach Tab-Wechsel erneut anfordern (Browser gibt ihn beim Wegwischen frei)
+  useEffect(() => {
+    const onVis = () => { if (document.visibilityState === 'visible' && running) void acquireWake(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [running]);
+
+  // Audio bei der ersten Nutzergeste im Training entsperren, damit der
+  // Auto-Start (nach ausgefülltem Satz) sofort einen laufenden Kontext hat.
+  useEffect(() => {
+    const unlock = () => ensureAudio();
+    document.addEventListener('pointerdown', unlock);
+    return () => document.removeEventListener('pointerdown', unlock);
+  }, []);
+
+  // Aufräumen beim Verlassen (Tab-Wechsel): Alarm + Keepalive + Wake Lock lösen
+  useEffect(() => () => { cancelAlarm(); stopKeepAlive(); releaseWake(); }, []);
+
   const start = (secs: number) => {
+    const ctx = ensureAudio();
+    if ('Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
+    void acquireWake();
+    startKeepAlive();
+    if (ctx) scheduleAlarm(ctx.currentTime + secs);
     setDuration(secs);
     setRemaining(secs);
     endRef.current = Date.now() + secs * 1000;
+    persistTimer(endRef.current, secs);
     setRunning(true);
   };
 
   const resume = () => {
+    const ctx = ensureAudio();
+    void acquireWake();
+    startKeepAlive();
+    if (ctx) scheduleAlarm(ctx.currentTime + remaining);
     endRef.current = Date.now() + remaining * 1000;
+    persistTimer(endRef.current, duration);
     setRunning(true);
   };
+
+  // Auto-Start: nach einem erfassten Satz die Pause automatisch starten.
+  // startSignal wird beim "Satz +" hochgezählt; ersten Wert überspringen.
+  const startRef = useRef(start);
+  startRef.current = start;
+  const seenSignal = useRef(startSignal);
+  useEffect(() => {
+    if (startSignal === seenSignal.current) return;
+    seenSignal.current = startSignal;
+    if (!autoStart) return;
+    setVisible(true);
+    startRef.current(duration);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startSignal]);
+
+  // Timer bei Workout-Ende (Speichern) komplett stoppen und ausblenden.
+  const seenStop = useRef(stopSignal);
+  useEffect(() => {
+    if (stopSignal === seenStop.current) return;
+    seenStop.current = stopSignal;
+    setRunning(false);
+    setRemaining(duration);
+    cancelAlarm();
+    stopKeepAlive();
+    releaseWake();
+    clearTimer();
+    setVisible(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stopSignal]);
 
   const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
   const progress = duration > 0 ? remaining / duration : 0;
@@ -83,7 +293,7 @@ function RestTimer() {
             </button>
           ))}
         </div>
-        <button onClick={() => { setRunning(false); setRemaining(duration); setVisible(false); }}
+        <button onClick={() => { setRunning(false); setRemaining(duration); cancelAlarm(); stopKeepAlive(); releaseWake(); clearTimer(); setVisible(false); }}
           className="text-text-muted hover:text-danger p-1"><X className="w-4 h-4" /></button>
       </div>
       <div className="flex items-center gap-3">
@@ -100,17 +310,29 @@ function RestTimer() {
         </div>
         <div className="flex gap-1">
           {running ? (
-            <button onClick={() => setRunning(false)} className="brutal-chip px-2.5 py-1.5">
+            <button onClick={() => { setRunning(false); cancelAlarm(); stopKeepAlive(); releaseWake(); clearTimer(); }} className="brutal-chip px-2.5 py-1.5">
               <Pause className="w-3.5 h-3.5" /></button>
           ) : (
             <button onClick={() => remaining > 0 && remaining < duration ? resume() : start(duration)}
               className="brutal-chip px-2.5 py-1.5 active">
               <Play className="w-3.5 h-3.5" /></button>
           )}
-          <button onClick={() => { setRunning(false); setRemaining(duration); }}
+          <button onClick={() => { setRunning(false); setRemaining(duration); cancelAlarm(); stopKeepAlive(); releaseWake(); clearTimer(); }}
             className="brutal-chip px-2.5 py-1.5"><RotateCcw className="w-3.5 h-3.5" /></button>
         </div>
       </div>
+
+      {/* Auto-Start-Schalter: nach jedem "Satz +" die Pause automatisch starten */}
+      <button onClick={() => onToggleAutoStart(!autoStart)}
+        className="mt-2.5 flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider
+          text-text-muted hover:text-text transition-colors">
+        <span className="w-8 h-4 border border-black flex items-center px-0.5 transition-all"
+          style={{ backgroundColor: autoStart ? 'var(--color-accent)' : 'var(--color-concrete)',
+            justifyContent: autoStart ? 'flex-end' : 'flex-start' }}>
+          <span className="w-3 h-3 bg-black block" />
+        </span>
+        Auto-Start nach Satz {autoStart ? 'an' : 'aus'}
+      </button>
     </div>
   );
 }
@@ -158,12 +380,48 @@ function PRCelebration({ prs, onClose }: { prs: NewPR[]; onClose: () => void }) 
 
 // ===== Hauptview =====
 
-export function TodayView({ ledger }: Props) {
-  const { templates, exercises: libraryExercises, exercisesByName, workouts, addWorkout, addExercise } = ledger;
+export function TodayView({ ledger, initialTemplateId, onOpenLibrary }: Props) {
+  const { templates, exercises: libraryExercises, exercisesByName, workouts, addWorkout, addExercise,
+    routines, settings, updateSettings } = ledger;
 
-  const [templateId, setTemplateId] = useState<string>(templates[0]?.id ?? '');
+  // Pausentimer-Einstellungen (Default: 180 s, Auto-Start an)
+  const restDefault = settings.restDefaultSec ?? 180;
+  const autoStartRest = settings.timerAutoStart ?? true;
+  const [restSignal, setRestSignal] = useState(0);
+  const [restStopSignal, setRestStopSignal] = useState(0);
+  // Sätze, die den Auto-Start schon ausgelöst haben (verhindert Mehrfachstart)
+  const startedSetsRef = useRef<Set<string>>(new Set());
+  // Tatsächlich trainierte Reihenfolge (Übungsnamen in Aktivierungs-/Erledigt-
+  // Reihenfolge). Wird beim Speichern zum Sortieren genutzt, damit die nächste
+  // Session die reale Reihenfolge dieses Trainings zeigt.
+  const engagedRef = useRef<string[]>([]);
+  const engage = (name: string) => { if (!engagedRef.current.includes(name)) engagedRef.current.push(name); };
+
+  // Info-Block (Muskeln + Letzte Session) einklappbar; Training-Abbrechen-Bestätigung
+  const [showOverview, setShowOverview] = useState(true);
+  const [cancelStep, setCancelStep] = useState(0);
+
+  // Zielvorschlag anzeigen? (in Einstellungen abschaltbar, Default an)
+  const showTarget = settings.showTarget !== false;
+
+  const prefillKey = (name: string, setIdx: number) => `${name}#${setIdx}`;
+
+  // Aktive Routine: nur deren Workouts (in Routinen-Reihenfolge) zeigen.
+  // Ohne aktive Routine (oder wenn leer/verwaist) → alle Workouts.
+  const activeRoutine = routines.find(r => r.id === settings.activeRoutineId) ?? null;
+  const visibleTemplates = useMemo(() => {
+    if (!activeRoutine) return templates;
+    const inRoutine = activeRoutine.templateIds
+      .map(id => templates.find(t => t.id === id))
+      .filter((t): t is WorkoutTemplate => !!t);
+    return inRoutine.length ? inRoutine : templates;
+  }, [activeRoutine, templates]);
+
+  const [templateId, setTemplateId] = useState<string>(visibleTemplates[0]?.id ?? '');
   const template: WorkoutTemplate | undefined =
-    templates.find(t => t.id === templateId) ?? templates[0];
+    visibleTemplates.find(t => t.id === templateId)
+    ?? templates.find(t => t.id === templateId)
+    ?? visibleTemplates[0];
 
   const [session, setSession] = useState<ExerciseEntry[]>([]);
   const [initialized, setInitialized] = useState(false);
@@ -172,26 +430,188 @@ export function TodayView({ ledger }: Props) {
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [newExerciseName, setNewExerciseName] = useState('');
   const [expandedRefs, setExpandedRefs] = useState<Set<string>>(new Set());
+  // Aufgeklappte Notizfelder je Satz (Key: name#setIdx)
+  const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set());
+  const toggleNote = (key: string) => setExpandedNotes(prev => {
+    const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n;
+  });
+  // Übung im Training tauschen (z. B. Maschine besetzt) → Auswahl-Panel je Übung
+  const [swapFor, setSwapFor] = useState<string | null>(null);
 
+  // Geführtes Training: am Anfang ist KEINE Übung aktiv — alle sind "geplant".
+  // Tippt man eine an, wird sie zur aktuellen Übung und rutscht nach ganz oben.
+  const [activeIdx, setActiveIdx] = useState<number | null>(null);
+  const [doneIdx, setDoneIdx] = useState<Set<number>>(new Set());
+
+  // Übung aktivieren → nach oben holen; Info-Block einklappen, damit sie oben sitzt
+  const activate = (exIdx: number) => {
+    setActiveIdx(exIdx);
+    setShowPreview(false);
+    setShowOverview(false);
+    const name = session[exIdx]?.name;
+    if (name) engage(name);
+  };
+
+  const markDone = (exIdx: number) => {
+    const name = session[exIdx]?.name;
+    if (name) engage(name);
+    setDoneIdx(prev => {
+      const next = new Set(prev);
+      next.add(exIdx);
+      // zur nächsten noch offenen Übung springen (sonst zurück zur Planung)
+      const nextOpen = session.findIndex((_, i) => i !== exIdx && !next.has(i));
+      setActiveIdx(nextOpen >= 0 ? nextOpen : null);
+      return next;
+    });
+  };
+  const reopen = (exIdx: number) => {
+    setDoneIdx(prev => { const n = new Set(prev); n.delete(exIdx); return n; });
+    setActiveIdx(exIdx);
+  };
+
+  // Sätze der letzten Session einer Übung (echte Werte) — nur als Referenz für
+  // die Platzhalter. Werden NICHT als Eingabe übernommen (nur Info bis Antippen).
+  const lastSetsFor = useCallback((name: string): { weight: number; reps: number }[] => {
+    const hist = workouts
+      .filter(w => w.exercises.some(e => e.name === name))
+      .sort((a, b) => b.date.localeCompare(a.date));
+    for (const w of hist) {
+      const valid = w.exercises.find(e => e.name === name)!.sets.filter(s => s.weight > 0 && s.reps > 0);
+      if (valid.length) return valid.map(s => ({ weight: s.weight, reps: s.reps }));
+    }
+    return [];
+  }, [workouts]);
+
+  // Leere Sätze in gleicher Anzahl wie die letzte Session (min. 1).
+  const emptyLikeLast = useCallback((name: string): ExerciseEntry['sets'] => {
+    const n = Math.max(lastSetsFor(name).length, 1);
+    return Array.from({ length: n }, () => ({ weight: 0, reps: 0, notes: '' }));
+  }, [lastSetsFor]);
+
+  // Standard-Belegung = Übungen der letzten Session, mit gleicher Satzzahl, aber
+  // LEEREN Feldern. Die letzten Werte erscheinen nur als grauer Platzhalter.
   const loadTemplate = useCallback((tpl: WorkoutTemplate | undefined) => {
-    setSession((tpl?.exerciseNames ?? []).map(name => ({ name, sets: emptySets() })));
+    let names: string[] = [];
+    if (tpl) {
+      const sessions = workouts
+        .filter(w => belongsTo(w, tpl))
+        .sort((a, b) => b.date.localeCompare(a.date));
+      names = sessions.length ? sessions[0].exercises.map(e => e.name) : tpl.exerciseNames;
+    }
+    setSession(names.map(name => ({ name, sets: emptyLikeLast(name) })));
+    setEdits({});
+    setActiveIdx(null);
+    setDoneIdx(new Set());
+    startedSetsRef.current = new Set();
+    engagedRef.current = [];
+    setShowOverview(true);
+    setCancelStep(0);
     setSaved(false);
     setShowAddExercise(false);
-  }, []);
+  }, [workouts, emptyLikeLast]);
 
-  // Erste Initialisierung, sobald Templates geladen sind
-  useEffect(() => {
-    if (!initialized && template) {
-      loadTemplate(template);
-      setTemplateId(template.id);
-      setInitialized(true);
+  // Volle Sätze der letzten Session (inkl. RIR + Notiz) für die Ghost-Platzhalter.
+  const lastFullSetsFor = useCallback((name: string): { weight: number; reps: number; rir?: number; notes?: string }[] => {
+    const hist = workouts
+      .filter(w => w.exercises.some(e => e.name === name))
+      .sort((a, b) => b.date.localeCompare(a.date));
+    for (const w of hist) {
+      const valid = w.exercises.find(e => e.name === name)!.sets.filter(s => s.weight > 0 && s.reps > 0);
+      if (valid.length) return valid.map(s => ({ weight: s.weight, reps: s.reps, rir: s.rir, notes: s.notes }));
     }
-  }, [initialized, template, loadTemplate]);
+    return [];
+  }, [workouts]);
+
+  // Platzhalter-Referenz je Satz (letzte Session), abgeleitet aus der Session.
+  const prefill = useMemo(() => {
+    const pf: Record<string, { w: number; r: number; rir?: number; note?: string }> = {};
+    const seen = new Set<string>();
+    for (const ex of session) {
+      if (seen.has(ex.name)) continue;
+      seen.add(ex.name);
+      lastFullSetsFor(ex.name).forEach((s, i) => {
+        pf[prefillKey(ex.name, i)] = { w: s.weight, r: s.reps, rir: s.rir ?? undefined, note: s.notes || undefined };
+      });
+    }
+    return pf;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.map(e => e.name).join('|'), lastFullSetsFor]);
+
+
+  // Erste Initialisierung, sobald Templates geladen sind:
+  // "Heute dran" > laufender Entwurf > Standard (letzte Session).
+  useEffect(() => {
+    if (initialized || !template) return;
+    // 1) Explizit über "Heute dran" gestartet → dieses Template frisch laden
+    if (initialTemplateId && templates.some(t => t.id === initialTemplateId)) {
+      const tpl = templates.find(t => t.id === initialTemplateId)!;
+      setTemplateId(initialTemplateId);
+      loadTemplate(tpl);
+      setInitialized(true);
+      return;
+    }
+    // 2) Laufender Entwurf mit echten Daten → wiederherstellen
+    const draft = readJSON<WorkoutDraft>(KEYS.draft);
+    const draftTpl = draft && templates.find(t => t.id === draft.templateId);
+    const draftHasData = !!draft?.session?.some(ex => ex.sets.some(s => s.weight > 0 && s.reps > 0));
+    if (draft && draftTpl && draftHasData) {
+      setTemplateId(draft.templateId);
+      setSession(draft.session);
+      setActiveIdx(draft.activeIdx ?? null);
+      setDoneIdx(new Set(draft.doneIdx ?? []));
+      const started = new Set<string>();
+      draft.session.forEach(ex => ex.sets.forEach((s, i) => {
+        if (s.weight > 0 && s.reps > 0) started.add(`${ex.name}#${i}`);
+      }));
+      startedSetsRef.current = started;
+      // trainierte Reihenfolge aus dem Entwurf übernehmen (Reihenfolge = Draft-Reihenfolge)
+      engagedRef.current = draft.session
+        .filter(ex => ex.sets.some(s => s.weight > 0 && s.reps > 0))
+        .map(ex => ex.name);
+      if (draft.activeIdx != null) setShowOverview(false);
+      setInitialized(true);
+      return;
+    }
+    // 3) Standard: das „Als Nächstes dran"-Workout der aktiven Routine
+    //    (gleiche Logik wie auf der Startseite), sonst das erste sichtbare.
+    const suggestedId = nextUpTemplateId(activeRoutine, templates, workouts);
+    const startTpl =
+      (suggestedId && (visibleTemplates.find(t => t.id === suggestedId) ?? templates.find(t => t.id === suggestedId)))
+      || template;
+    setTemplateId(startTpl.id);
+    loadTemplate(startTpl);
+    setInitialized(true);
+  }, [initialized, template, templates, initialTemplateId, activeRoutine, visibleTemplates, workouts, loadTemplate]);
+
+  // Routinenwechsel: fällt das gewählte Workout aus der Auswahl, aufs erste springen
+  useEffect(() => {
+    if (initialized && visibleTemplates.length &&
+        !visibleTemplates.some(t => t.id === templateId)) {
+      setTemplateId(visibleTemplates[0].id);
+      loadTemplate(visibleTemplates[0]);
+    }
+  }, [visibleTemplates, initialized, templateId, loadTemplate]);
 
   const selectTemplate = (id: string) => {
     setTemplateId(id);
     loadTemplate(templates.find(t => t.id === id));
   };
+
+  // Laufendes Training als Entwurf sichern — aber erst wenn der Nutzer wirklich
+  // angefangen hat (Satz bestätigt oder Übung abgehakt). Die reine Vorbelegung
+  // aus der letzten Session wird NICHT als Entwurf gespeichert, damit sie beim
+  // Zurückkommen grau bleibt. Übersteht Tab-Wechsel + App-Schließen.
+  useEffect(() => {
+    if (!initialized) return;
+    const started = session.some(ex => ex.sets.some(s => s.weight > 0 && s.reps > 0)) || doneIdx.size > 0;
+    if (started) {
+      writeJSON(KEYS.draft, {
+        templateId, session, activeIdx, doneIdx: [...doneIdx], savedAt: Date.now(),
+      } satisfies WorkoutDraft);
+    } else {
+      localStorage.removeItem(KEYS.draft);
+    }
+  }, [session, activeIdx, doneIdx, templateId, initialized]);
 
   // Muskeln, die die heutige Session trifft (aus der Bibliothek abgeleitet)
   const sessionMuscles = useMemo(() => {
@@ -225,24 +645,63 @@ export function TodayView({ ledger }: Props) {
     });
   };
 
-  // Letztes Training dieses Templates als Vorlage laden
-  const lastOfTemplate = useMemo(() => {
-    if (!template) return null;
-    return workouts.find(w =>
-      w.templateId === template.id || (template.preset && w.type === template.preset)
-    ) ?? null;
+  // Ziel-Vorschlag pro Übung der Session, aus dem gesamten Verlauf abgeleitet
+  const targets = useMemo(() => {
+    const map = new Map<string, TargetSuggestion | null>();
+    for (const ex of session) {
+      if (map.has(ex.name)) continue;
+      const history = workouts
+        .filter(w => w.exercises.some(e => e.name === ex.name))
+        .map(w => ({ date: w.date, sets: w.exercises.find(e => e.name === ex.name)!.sets }));
+      map.set(ex.name, suggestNextTarget(history));
+    }
+    return map;
+  }, [session, workouts]);
+
+  // Alle bisherigen Sessions dieses Workouts, neueste zuerst
+  const templateSessions = useMemo(() => {
+    if (!template) return [];
+    return workouts
+      .filter(w => belongsTo(w, template))
+      .sort((a, b) => b.date.localeCompare(a.date));
   }, [workouts, template]);
+
+  const lastOfTemplate = templateSessions[0] ?? null;
+
+  // Workout-eigene Übungs-Bib: alles, was je in diesem Workout gemacht wurde
+  // (nach Häufigkeit sortiert) — dient als Schnellauswahl beim Hinzufügen.
+  const workoutPool = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const w of templateSessions) {
+      for (const ex of w.exercises) counts.set(ex.name, (counts.get(ex.name) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([n]) => n);
+  }, [templateSessions]);
+
+  // Vorschau der letzten Session dieses Templates: Übungen, Reihenfolge, Satzzahl
+  const [showPreview, setShowPreview] = useState(true);
+  const templatePreview = useMemo(() => {
+    if (!lastOfTemplate) return null;
+    return lastOfTemplate.exercises.map(ex => {
+      const valid = ex.sets.filter(s => s.weight > 0 && s.reps > 0);
+      const top = valid.reduce((mx, s) => (s.weight > mx ? s.weight : mx), 0);
+      return { name: ex.name, setCount: valid.length, topWeight: top };
+    });
+  }, [lastOfTemplate]);
 
   const duplicateLast = () => {
     if (!lastOfTemplate) return;
     setSession(lastOfTemplate.exercises.map(ex => ({
       name: ex.name,
-      sets: ex.sets.map(s => ({ weight: s.weight, reps: s.reps, notes: '' })),
+      sets: ex.sets.map(s => ({ weight: s.weight, reps: s.reps, rir: s.rir, notes: '' })),
     })));
+    setActiveIdx(null);
+    setDoneIdx(new Set());
+    engagedRef.current = lastOfTemplate.exercises.map(ex => ex.name);
     setSaved(false);
   };
 
-  const updateSet = (exIdx: number, setIdx: number, field: 'weight' | 'reps' | 'notes', value: string | number) => {
+  const updateSet = (exIdx: number, setIdx: number, field: 'weight' | 'reps' | 'notes' | 'rir', value: string | number | undefined) => {
     setSession(prev => {
       const updated = [...prev];
       const sets = [...updated[exIdx].sets];
@@ -250,6 +709,38 @@ export function TodayView({ ledger }: Props) {
       updated[exIdx] = { ...updated[exIdx], sets };
       return updated;
     });
+  };
+
+  // Tipp-Puffer für Zahlenfelder: hält den rohen String (z. B. "7,") während des
+  // Tippens, damit Kommazahlen nicht vorzeitig auf die geparste Zahl zurückspringen.
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const editKey = (exIdx: number, setIdx: number, field: string) => `${exIdx}-${setIdx}-${field}`;
+
+  const setNumField = (exIdx: number, setIdx: number, field: 'weight' | 'reps' | 'rir', raw: string) => {
+    setEdits(prev => ({ ...prev, [editKey(exIdx, setIdx, field)]: raw }));
+    const val = field === 'rir'
+      ? (raw.trim() === '' ? undefined : parseDec(raw))
+      : parseDec(raw);
+    updateSet(exIdx, setIdx, field, val);
+  };
+  const blurNumField = (exIdx: number, setIdx: number, field: string) => {
+    setEdits(prev => { const n = { ...prev }; delete n[editKey(exIdx, setIdx, field)]; return n; });
+    // Auto-Start: sobald ein Satz vollständig ist (Gewicht + Wdh.), Pause starten —
+    // je Satz nur einmal, damit Nachbearbeiten nicht erneut auslöst.
+    const set = session[exIdx]?.sets[setIdx];
+    if (set && set.weight > 0 && set.reps > 0) {
+      const key = `${session[exIdx].name}#${setIdx}`;
+      if (!startedSetsRef.current.has(key)) {
+        startedSetsRef.current.add(key);
+        setRestSignal(s => s + 1);
+      }
+    }
+  };
+  const numFieldValue = (exIdx: number, setIdx: number, field: 'weight' | 'reps' | 'rir', stored: number | undefined) => {
+    const k = editKey(exIdx, setIdx, field);
+    if (k in edits) return edits[k];
+    if (field === 'rir') return stored == null ? '' : fmtNum(stored);
+    return stored ? fmtNum(stored) : '';
   };
 
   const addSet = (exIdx: number) => {
@@ -276,25 +767,69 @@ export function TodayView({ ledger }: Props) {
 
   const removeSessionExercise = (exIdx: number) => {
     setSession(prev => prev.filter((_, i) => i !== exIdx));
+    // Fertig-Markierungen an die verschobenen Indizes anpassen
+    setDoneIdx(prev => {
+      const n = new Set<number>();
+      prev.forEach(i => { if (i < exIdx) n.add(i); else if (i > exIdx) n.add(i - 1); });
+      return n;
+    });
+    setActiveIdx(a => (a === null ? null : a === exIdx ? null : a > exIdx ? a - 1 : a));
   };
 
-  const handleAddExercise = (name: string) => {
+  // Primärmuskeln einer Übung (aus der Bibliothek)
+  const primaryMusclesOf = useCallback((name: string): MuscleId[] => {
+    const def = exercisesByName.get(name);
+    return def ? def.muscles.filter(m => m.role === 'primary').map(m => m.muscle) : [];
+  }, [exercisesByName]);
+
+  // Alternativen für Quick-Switch: gleiche Primärmuskeln, nicht schon in der Session
+  const swapCandidates = useCallback((name: string) => {
+    const prim = new Set(primaryMusclesOf(name));
+    if (prim.size === 0) return [];
+    return libraryExercises
+      .filter(e => e.name !== name && !session.some(s => s.name === e.name))
+      .filter(e => e.muscles.some(m => m.role === 'primary' && prim.has(m.muscle)))
+      .sort((a, b) => a.name.localeCompare(b.name, 'de'));
+  }, [libraryExercises, session, primaryMusclesOf]);
+
+  // Übung im Training tauschen: Name ersetzen, Sätze der neuen Übung leer vorbelegen
+  const swapExercise = (exIdx: number, newName: string) => {
+    const oldName = session[exIdx]?.name;
+    setSession(prev => prev.map((ex, i) => i === exIdx ? { name: newName, sets: emptyLikeLast(newName) } : ex));
+    if (oldName) {
+      const oi = engagedRef.current.indexOf(oldName);
+      if (oi >= 0) engagedRef.current[oi] = newName;
+    }
+    setSwapFor(null);
+  };
+
+  const handleAddExercise = (name: string, keepOpen = false) => {
     const trimmed = name.trim();
     if (!trimmed) return;
     if (!exercisesByName.has(trimmed)) {
       // Neue Übung landet automatisch in der Bibliothek (Muskeln später zuordnen)
       addExercise({ name: trimmed, equipment: 'machine', muscles: [] });
     }
-    setSession(prev => [...prev, { name: trimmed, sets: emptySets() }]);
+    setSession(prev => {
+      if (prev.some(s => s.name === trimmed)) return prev;
+      setActiveIdx(prev.length);   // neue Übung wird aktiv
+      return [...prev, { name: trimmed, sets: emptyLikeLast(trimmed) }];
+    });
     setNewExerciseName('');
-    setShowAddExercise(false);
+    if (!keepOpen) setShowAddExercise(false);
   };
+
+  // Schnellauswahl aus diesem Workout (noch nicht in der Session)
+  const poolToAdd = useMemo(
+    () => workoutPool.filter(n => !session.some(s => s.name === n)),
+    [workoutPool, session]
+  );
 
   const availableToAdd = useMemo(
     () => libraryExercises
-      .filter(e => !session.some(s => s.name === e.name))
+      .filter(e => !session.some(s => s.name === e.name) && !workoutPool.includes(e.name))
       .sort((a, b) => a.name.localeCompare(b.name, 'de')),
-    [libraryExercises, session]
+    [libraryExercises, session, workoutPool]
   );
 
   const handleSave = () => {
@@ -304,17 +839,35 @@ export function TodayView({ ledger }: Props) {
       .filter(ex => ex.sets.length > 0);
     if (validExercises.length === 0) return;
 
+    // In der tatsächlich trainierten Reihenfolge speichern (Aktivierungs-/Erledigt-
+    // Reihenfolge). Übungen ohne erfasste Reihenfolge behalten ihre Position hinten.
+    const order = engagedRef.current;
+    const orderedExercises = validExercises
+      .map((ex, i) => ({ ex, o: order.indexOf(ex.name), i }))
+      .sort((a, b) => (a.o < 0 ? 1e9 : a.o) - (b.o < 0 ? 1e9 : b.o) || a.i - b.i)
+      .map(d => d.ex);
+
     const entry: Omit<WorkoutEntry, 'id'> = {
       date: new Date().toISOString().split('T')[0],
       type: template.preset ?? 'custom',
       label: template.name,
       templateId: template.id,
-      exercises: validExercises,
+      exercises: orderedExercises,
     };
     const prs = detectNewPRs(entry, workouts);
     addWorkout(entry);
+    localStorage.removeItem(KEYS.draft);
     setSaved(true);
+    setRestStopSignal(s => s + 1);   // Pausentimer bei Workout-Ende stoppen
     if (prs.length > 0) setNewPRs(prs);
+    // Editor für die nächste Session frisch machen (Entwurf ist erledigt)
+    setSession(prev => prev.map(ex => ({ name: ex.name, sets: emptyLikeLast(ex.name) })));
+    setActiveIdx(null);
+    setDoneIdx(new Set());
+    setEdits({});
+    startedSetsRef.current = new Set();
+    engagedRef.current = [];
+    setShowOverview(true);
     setTimeout(() => setSaved(false), 2500);
   };
 
@@ -332,14 +885,38 @@ export function TodayView({ ledger }: Props) {
             {new Date().toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })}
           </p>
         </div>
-        <Dumbbell className="w-8 h-8 text-accent" />
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {onOpenLibrary && (
+            <button onClick={onOpenLibrary}
+              className="brutal-chip px-2.5 py-2 flex items-center gap-1.5"
+              aria-label="Übungen & Workouts bearbeiten">
+              <BookOpen className="w-4 h-4" />
+            </button>
+          )}
+          <Dumbbell className="w-8 h-8 text-accent" />
+        </div>
       </div>
 
-      <RestTimer />
+      <RestTimer
+        defaultSec={restDefault}
+        autoStart={autoStartRest}
+        onToggleAutoStart={v => updateSettings({ timerAutoStart: v })}
+        startSignal={restSignal}
+        stopSignal={restStopSignal} />
 
-      {/* Workout-Auswahl (Templates) */}
+      {/* Aktive Routine (falls gesetzt) */}
+      {activeRoutine && (
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <ListChecks className="w-3 h-3 text-accent" />
+          <span className="text-[10px] text-text-dim font-mono uppercase tracking-wider">
+            Routine: <span className="text-text font-bold">{activeRoutine.name}</span>
+          </span>
+        </div>
+      )}
+
+      {/* Workout-Auswahl (nur Workouts der aktiven Routine, sonst alle) */}
       <div className="flex gap-2 mb-3 overflow-x-auto pb-1 -mx-1 px-1">
-        {templates.map(t => (
+        {visibleTemplates.map(t => (
           <button key={t.id} onClick={() => selectTemplate(t.id)}
             className="brutal-chip px-3.5 py-2.5 text-sm whitespace-nowrap flex-shrink-0"
             style={template?.id === t.id
@@ -350,6 +927,33 @@ export function TodayView({ ledger }: Props) {
         ))}
       </div>
 
+      {/* Steuerzeile: Info-Block ein-/ausklappen + Training abbrechen (nur wenn nichts offen) */}
+      <div className="flex items-center justify-between gap-2 mb-2 min-h-[20px]">
+        {(sessionMuscles.primary.length > 0 || sessionMuscles.secondary.length > 0 || (templatePreview && templatePreview.length > 0)) ? (
+          <button onClick={() => setShowOverview(v => !v)}
+            className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-text-muted hover:text-text transition-colors">
+            {showOverview ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />} Übersicht
+          </button>
+        ) : <span />}
+        {hasData && (activeIdx === null || showOverview) && (
+          cancelStep === 0 ? (
+            <button onClick={() => setCancelStep(1)}
+              className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-danger hover:text-red-300 transition-colors">
+              <X className="w-3 h-3" /> Training abbrechen
+            </button>
+          ) : (
+            <span className="flex items-center gap-1.5">
+              <span className="text-[10px] font-mono text-text-dim">Verwerfen?</span>
+              <button onClick={() => { loadTemplate(template); setCancelStep(0); }}
+                className="brutal-chip px-2 py-0.5 text-[10px]"
+                style={{ backgroundColor: 'var(--color-danger)', color: '#fff', borderColor: '#000' }}>Ja</button>
+              <button onClick={() => setCancelStep(0)} className="brutal-chip px-2 py-0.5 text-[10px]">Nein</button>
+            </span>
+          )
+        )}
+      </div>
+
+      {showOverview && (<>
       {/* Muskel-Vorschau der Session */}
       {(sessionMuscles.primary.length > 0 || sessionMuscles.secondary.length > 0) && (
         <div className="flex flex-wrap items-center gap-1 mb-3 animate-fade-in">
@@ -369,6 +973,43 @@ export function TodayView({ ledger }: Props) {
         </div>
       )}
 
+      {/* Vorschau der letzten Session dieses Templates */}
+      {templatePreview && templatePreview.length > 0 && lastOfTemplate && (
+        <div className="brutal-card-sm mb-3 animate-fade-in" style={{ borderLeft: `4px solid ${accentColor}` }}>
+          <button onClick={() => setShowPreview(!showPreview)}
+            className="w-full flex items-center justify-between px-3 py-2.5 text-left">
+            <div className="flex items-center gap-2 min-w-0">
+              <ClipboardList className="w-4 h-4 flex-shrink-0" style={{ color: accentColor }} />
+              <span className="text-xs font-bold text-text font-display tracking-wider uppercase">
+                Letzte Session
+              </span>
+              <span className="text-[10px] text-text-muted font-mono">
+                {new Date(lastOfTemplate.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+                {' · '}{templatePreview.reduce((s, e) => s + e.setCount, 0)} Sätze
+              </span>
+            </div>
+            {showPreview ? <ChevronUp className="w-4 h-4 text-text-dim flex-shrink-0" />
+              : <ChevronDown className="w-4 h-4 text-text-dim flex-shrink-0" />}
+          </button>
+          {showPreview && (
+            <div className="px-3 pb-3 space-y-1">
+              {templatePreview.map((e, i) => (
+                <div key={`${e.name}-${i}`} className="flex items-center gap-2 text-[11px] font-mono">
+                  <span className="text-text-muted w-4 text-right">{i + 1}.</span>
+                  <span className="text-text-dim flex-1 truncate">{e.name}</span>
+                  <span className="px-1.5 py-0.5 border font-bold flex-shrink-0"
+                    style={{ backgroundColor: 'var(--color-concrete)', borderColor: '#3d3d3d', color: 'var(--color-text)' }}>
+                    {e.setCount}×
+                  </span>
+                  {e.topWeight > 0 && <span className="text-accent w-14 text-right">{e.topWeight}kg</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      </>)}
+
       {lastOfTemplate && !hasData && (
         <button onClick={duplicateLast}
           className="w-full py-2.5 mb-3 brutal-card-sm text-text-dim flex items-center justify-center gap-2
@@ -379,30 +1020,123 @@ export function TodayView({ ledger }: Props) {
       )}
 
       <div className="space-y-3">
-        {session.map((ex, exIdx) => (
+        {(activeIdx === null
+          ? session.map((_, i) => i)
+          : [activeIdx, ...session.map((_, i) => i).filter(i => i !== activeIdx)]
+        ).map((exIdx) => {
+          const ex = session[exIdx];
+          const target = targets.get(ex.name) ?? null;
+          const TrendMark = target?.trend === 'up' ? TrendingUp
+            : target?.trend === 'down' ? TrendingDown : Minus;
+          const trendCol = target?.trend === 'up' ? 'var(--color-success)'
+            : target?.trend === 'down' ? 'var(--color-danger)' : 'var(--color-text-muted)';
+          const isActive = exIdx === activeIdx;
+          const isDone = doneIdx.has(exIdx);
+          const loggedSets = ex.sets.filter(s => s.weight > 0 && s.reps > 0).length;
+          const stripe = isDone ? 'var(--color-success)' : isActive ? accentColor : '#3d3d3d';
+          return (
           <div key={`${ex.name}-${exIdx}`} className="brutal-card-sm p-3 animate-slide-up"
-            style={{ borderLeft: `4px solid ${accentColor}` }}>
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="text-sm font-bold text-text font-display tracking-wider truncate">{ex.name}</span>
-                <button onClick={() => toggleRef(ex.name)}
-                  className="text-[10px] text-text-muted hover:text-accent transition-colors font-mono
-                    flex items-center gap-0.5 brutal-chip px-1.5 py-0.5 flex-shrink-0">
-                  Verlauf
-                  {expandedRefs.has(ex.name)
-                    ? <ChevronUp className="w-3 h-3" />
-                    : <ChevronDown className="w-3 h-3" />}
-                </button>
-              </div>
+            style={{ borderLeft: `4px solid ${stripe}`, opacity: isDone && !isActive ? 0.6 : 1 }}>
+            <div className="flex items-center justify-between gap-2">
+              {/* Nummer + Name — antippen macht die Übung aktiv (rutscht nach oben) */}
+              <button onClick={() => activate(exIdx)}
+                className="flex items-center gap-2 min-w-0 flex-1 text-left">
+                <span className="w-6 h-6 flex items-center justify-center flex-shrink-0 text-xs font-bold font-mono border"
+                  style={isDone
+                    ? { backgroundColor: 'var(--color-success)', color: '#000', borderColor: '#000' }
+                    : isActive
+                      ? { backgroundColor: accentColor, color: '#000', borderColor: '#000' }
+                      : { color: 'var(--color-text-dim)', borderColor: '#3d3d3d' }}>
+                  {exIdx + 1}
+                </span>
+                <span className={`text-sm font-bold text-text font-display tracking-wider truncate ${isDone ? 'line-through' : ''}`}>
+                  {ex.name}
+                </span>
+              </button>
               <div className="flex items-center gap-2 flex-shrink-0">
-                <span className="text-xs text-text-muted font-mono">{ex.sets.length}S</span>
-                <button onClick={() => removeSessionExercise(exIdx)}
-                  className="text-text-muted hover:text-danger transition-colors p-1"
-                  title="Aus dieser Session entfernen">
-                  <X className="w-4 h-4" />
+                <span className="text-xs text-text-muted font-mono">
+                  {isDone || !isActive ? `${loggedSets || ex.sets.length}×` : `${ex.sets.length}S`}
+                </span>
+                {isActive && (
+                  <button onClick={() => setSwapFor(swapFor === ex.name ? null : ex.name)}
+                    className="text-text-muted hover:text-accent transition-colors p-1"
+                    title="Übung tauschen (gleicher Muskel)">
+                    <Repeat className="w-4 h-4" />
+                  </button>
+                )}
+                {isActive && (
+                  <button onClick={() => removeSessionExercise(exIdx)}
+                    className="text-text-muted hover:text-danger transition-colors p-1"
+                    title="Aus dieser Session entfernen">
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+                {/* Fertig-Haken */}
+                <button onClick={() => isDone ? reopen(exIdx) : markDone(exIdx)}
+                  className="p-0.5 transition-colors" title={isDone ? 'Wieder öffnen' : 'Übung fertig'}>
+                  {isDone
+                    ? <Check className="w-5 h-5" style={{ color: 'var(--color-success)' }} />
+                    : <Circle className="w-5 h-5 text-text-muted hover:text-success" />}
                 </button>
               </div>
             </div>
+
+            {/* Eingeklappt: kurze Ziel-Zeile (nur wenn nicht erledigt & Ziel an) */}
+            {!isActive && !isDone && showTarget && target && (
+              <div className="mt-1.5 ml-8 text-[10px] font-mono text-text-muted">
+                Ziel <span className="text-text-dim">{fmtNum(target.weight)}kg × {fmtNum(target.reps)}</span>
+              </div>
+            )}
+
+            {/* Übung tauschen (gleicher Primärmuskel) – z. B. Maschine besetzt */}
+            {isActive && swapFor === ex.name && (
+              <div className="mt-2 mb-1 p-2 brutal-card-sm animate-slide-up" style={{ backgroundColor: 'var(--color-concrete)' }}>
+                <p className="text-[10px] font-mono uppercase tracking-wider text-text-muted mb-1.5">
+                  Tauschen gegen (gleicher Muskel):
+                </p>
+                {(() => {
+                  const cands = swapCandidates(ex.name);
+                  return cands.length ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {cands.map(c => (
+                        <button key={c.name} onClick={() => swapExercise(exIdx, c.name)}
+                          className="brutal-chip px-2 py-1 text-[11px]">{c.name}</button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[10px] font-mono text-text-dim">Keine passende Alternative in der Bibliothek.</p>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* Aktive Übung: volle Eingabe */}
+            {isActive && (<>
+            <button onClick={() => toggleRef(ex.name)}
+              className="mt-2 text-[10px] text-text-muted hover:text-accent transition-colors font-mono
+                flex items-center gap-0.5 brutal-chip px-1.5 py-0.5 w-fit">
+              Verlauf
+              {expandedRefs.has(ex.name) ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            </button>
+
+            {/* Zielvorschlag (abschaltbar in Einstellungen) */}
+            {showTarget && target && (
+              <div className="flex items-center flex-wrap gap-x-3 gap-y-1 my-2 text-[10px] font-mono">
+                <span className="flex items-center gap-1 px-1.5 py-0.5 border"
+                  style={{ borderColor: accentColor, color: 'var(--color-text)' }}>
+                  <Target className="w-3 h-3" style={{ color: accentColor }} />
+                  Ziel {fmtNum(target.weight)}kg × {fmtNum(target.reps)}
+                  <TrendMark className="w-3 h-3" style={{ color: trendCol }} />
+                </span>
+              </div>
+            )}
+
+            {/* Legende: graue Platzhalter = letzte Session (nur Vorschlag) */}
+            {Object.keys(prefill).some(k => k.startsWith(`${ex.name}#`)) && (
+              <p className="text-[9px] font-mono mt-2 mb-1 text-text-muted">
+                grau = letztes Mal in diesem Satz (nur Info)
+              </p>
+            )}
 
             {expandedRefs.has(ex.name) && (
               <div className="mb-2 p-2 animate-slide-up" style={{ backgroundColor: 'var(--color-concrete)' }}>
@@ -421,7 +1155,7 @@ export function TodayView({ ledger }: Props) {
                           {' — '}
                           {h.exercise.sets
                             .filter(s => s.weight > 0 && s.reps > 0)
-                            .map(s => `${s.weight}kg × ${s.reps}`)
+                            .map(s => `${fmtNum(s.weight)}kg × ${fmtNum(s.reps)}${s.rir != null ? ` · ${fmtNum(s.rir)} RIR` : ''}`)
                             .join(', ')}
                         </div>
                       ))}
@@ -434,22 +1168,51 @@ export function TodayView({ ledger }: Props) {
             )}
 
             <div className="space-y-1.5">
-              {ex.sets.map((set, setIdx) => (
-                <div key={setIdx} className="flex items-center gap-1.5">
+              {ex.sets.map((set, setIdx) => {
+                const pf = prefill[prefillKey(ex.name, setIdx)];
+                const wPlaceholder = pf && pf.w > 0 ? fmtNum(pf.w) : (showTarget && target ? fmtNum(target.weight) : '0');
+                const rPlaceholder = pf && pf.r > 0 ? fmtNum(pf.r) : (showTarget && target ? fmtNum(target.reps) : '0');
+                const rirPlaceholder = pf && pf.rir != null ? fmtNum(pf.rir) : 'RIR';
+                const numCls = 'brutal-input px-1 py-2.5 text-xs text-center font-mono';
+                const noteKey = prefillKey(ex.name, setIdx);
+                const noteOpen = expandedNotes.has(noteKey);
+                const hasNote = !!(set.notes && set.notes.trim());
+                const lastNote = pf?.note;
+                return (
+                <div key={setIdx} className="space-y-1">
+                <div className="flex items-center gap-1.5">
                   <span className="text-xs text-text-muted w-4 text-right font-mono">{setIdx + 1}</span>
-                  <input type="number" inputMode="decimal" placeholder="0"
-                    value={set.weight || ''}
-                    onChange={e => updateSet(exIdx, setIdx, 'weight', e.target.value ? parseFloat(e.target.value) : 0)}
-                    className="brutal-input w-16 px-2 py-2.5 text-sm text-center font-mono" />
+                  <input type="text" inputMode="decimal"
+                    placeholder={wPlaceholder}
+                    value={numFieldValue(exIdx, setIdx, 'weight', set.weight)}
+                    onChange={e => setNumField(exIdx, setIdx, 'weight', e.target.value)}
+                    onBlur={() => blurNumField(exIdx, setIdx, 'weight')}
+                    className={`${numCls} flex-1 min-w-0`} />
                   <span className="text-text-muted text-[10px] uppercase font-mono">kg</span>
-                  <input type="number" inputMode="numeric" placeholder="0"
-                    value={set.reps || ''}
-                    onChange={e => updateSet(exIdx, setIdx, 'reps', e.target.value ? parseInt(e.target.value) : 0)}
-                    className="brutal-input w-14 px-2 py-2.5 text-sm text-center font-mono" />
-                  <input type="text" placeholder="Notiz"
-                    value={set.notes || ''}
-                    onChange={e => updateSet(exIdx, setIdx, 'notes', e.target.value)}
-                    className="brutal-input flex-1 px-2 py-2.5 text-xs font-mono min-w-0" />
+                  <input type="text" inputMode="decimal"
+                    placeholder={rPlaceholder}
+                    value={numFieldValue(exIdx, setIdx, 'reps', set.reps)}
+                    onChange={e => setNumField(exIdx, setIdx, 'reps', e.target.value)}
+                    onBlur={() => blurNumField(exIdx, setIdx, 'reps')}
+                    className={`${numCls} w-11`} />
+                  <input type="text" inputMode="decimal" placeholder={rirPlaceholder}
+                    value={numFieldValue(exIdx, setIdx, 'rir', set.rir)}
+                    onChange={e => setNumField(exIdx, setIdx, 'rir', e.target.value)}
+                    onBlur={() => blurNumField(exIdx, setIdx, 'rir')}
+                    className="brutal-input w-10 px-0.5 py-2.5 text-xs text-center font-mono"
+                    style={{ color: 'var(--color-warning)' }}
+                    title="Reps in Reserve (optional)" />
+                  {/* Notiz-Umschalter: gefüllt = eigene Notiz, ! = Notiz vom letzten Mal */}
+                  <button onClick={() => toggleNote(noteKey)}
+                    className="relative flex-shrink-0 p-1.5 border-2 border-black"
+                    style={{ backgroundColor: hasNote ? 'var(--color-accent)' : 'var(--color-steel)' }}
+                    title={hasNote ? 'Notiz bearbeiten' : lastNote ? `Letzte Notiz: ${lastNote}` : 'Notiz hinzufügen'}>
+                    <StickyNote className="w-3.5 h-3.5" style={{ color: hasNote ? '#000' : 'var(--color-text-dim)' }} />
+                    {!hasNote && lastNote && (
+                      <span className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 rounded-full flex items-center justify-center text-[9px] font-bold"
+                        style={{ backgroundColor: 'var(--color-warning)', color: '#000' }}>!</span>
+                    )}
+                  </button>
                   {ex.sets.length > 1 && (
                     <button onClick={() => removeSet(exIdx, setIdx)}
                       className="text-text-muted hover:text-danger flex-shrink-0 p-1">
@@ -457,7 +1220,24 @@ export function TodayView({ ledger }: Props) {
                     </button>
                   )}
                 </div>
-              ))}
+                {noteOpen && (
+                  <div className="pl-5 animate-slide-up">
+                    {lastNote && (
+                      <button onClick={() => !hasNote && updateSet(exIdx, setIdx, 'notes', lastNote)}
+                        className="block w-full text-left text-[10px] font-mono text-warning mb-1 truncate"
+                        title="Tippen zum Übernehmen">
+                        ! Letztes Mal: <span className="text-text-dim">{lastNote}</span>
+                      </button>
+                    )}
+                    <textarea placeholder="Notiz zu diesem Satz…" rows={2}
+                      value={set.notes || ''}
+                      onChange={e => updateSet(exIdx, setIdx, 'notes', e.target.value)}
+                      className="brutal-input w-full px-2 py-2 text-xs font-mono min-w-0 resize-y leading-relaxed" />
+                  </div>
+                )}
+                </div>
+                );
+              })}
             </div>
 
             <button onClick={() => addSet(exIdx)}
@@ -465,16 +1245,41 @@ export function TodayView({ ledger }: Props) {
                 font-display tracking-wider uppercase py-1">
               <Plus className="w-3 h-3" /> Satz
             </button>
+
+            {/* Übung abhaken → springt zur nächsten offenen Übung */}
+            <button onClick={() => markDone(exIdx)}
+              className="brutal-btn w-full py-2.5 mt-3 text-sm"
+              style={{ backgroundColor: 'var(--color-success)', color: '#000' }}>
+              <Check className="w-4 h-4" />
+              {doneIdx.size + 1 >= session.length ? 'Übung fertig' : 'Fertig → nächste Übung'}
+            </button>
+            </>)}
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {showAddExercise ? (
-        <div className="brutal-card-sm p-3 mt-3 animate-slide-up space-y-2">
+        <div className="brutal-card-sm p-3 mt-3 animate-slide-up space-y-2.5">
+          {/* Schnellauswahl aus diesem Workout */}
+          {poolToAdd.length > 0 && (
+            <div>
+              <span className="section-label mb-1">Aus diesem Workout</span>
+              <div className="flex flex-wrap gap-1.5">
+                {poolToAdd.map(name => (
+                  <button key={name} onClick={() => handleAddExercise(name, true)}
+                    className="brutal-chip px-2.5 py-1.5 text-[11px] gap-1"
+                    style={{ backgroundColor: accentColor, color: '#000', borderColor: '#000' }}>
+                    <Plus className="w-3 h-3" /> {name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {availableToAdd.length > 0 && (
             <div className="relative">
-              <select defaultValue=""
-                onChange={e => e.target.value && handleAddExercise(e.target.value)}
+              <select value="" key={session.length}
+                onChange={e => e.target.value && handleAddExercise(e.target.value, true)}
                 className="w-full appearance-none brutal-input px-3 py-2.5 text-sm font-mono cursor-pointer">
                 <option value="" disabled>Aus Bibliothek wählen…</option>
                 {availableToAdd.map(ex => (

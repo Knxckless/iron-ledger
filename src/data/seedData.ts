@@ -4,6 +4,7 @@
 export interface SetEntry {
   weight: number;
   reps: number;
+  rir?: number;      // Reps in Reserve (optional, nur zur eigenen Info)
   notes?: string;
 }
 

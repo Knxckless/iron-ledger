@@ -2,6 +2,7 @@
 
 export type MuscleId =
   | 'chest'
+  | 'upper_chest'
   | 'upper_back'
   | 'lats'
   | 'lower_back'
@@ -15,6 +16,8 @@ export type MuscleId =
   | 'quads'
   | 'hamstrings'
   | 'glutes'
+  | 'adductors'
+  | 'abductors'
   | 'calves'
   | 'abs';
 
@@ -37,6 +40,7 @@ export interface MuscleInfo {
 
 export const MUSCLES: MuscleInfo[] = [
   { id: 'chest', label: 'Brust', short: 'Brust', category: 'push' },
+  { id: 'upper_chest', label: 'Obere Brust', short: 'O. Brust', category: 'push' },
   { id: 'front_delts', label: 'Vordere Schulter', short: 'V. Schulter', category: 'push' },
   { id: 'side_delts', label: 'Seitliche Schulter', short: 'S. Schulter', category: 'push' },
   { id: 'triceps', label: 'Trizeps', short: 'Trizeps', category: 'push' },
@@ -49,6 +53,8 @@ export const MUSCLES: MuscleInfo[] = [
   { id: 'quads', label: 'Quadrizeps', short: 'Quads', category: 'legs' },
   { id: 'hamstrings', label: 'Beinbeuger', short: 'Hamstrings', category: 'legs' },
   { id: 'glutes', label: 'Gluteus', short: 'Gluteus', category: 'legs' },
+  { id: 'adductors', label: 'Adduktoren', short: 'Adduktor', category: 'legs' },
+  { id: 'abductors', label: 'Abduktoren', short: 'Abduktor', category: 'legs' },
   { id: 'calves', label: 'Waden', short: 'Waden', category: 'legs' },
   { id: 'abs', label: 'Bauch', short: 'Bauch', category: 'core' },
   { id: 'lower_back', label: 'Unterer Rücken', short: 'U. Rücken', category: 'core' },

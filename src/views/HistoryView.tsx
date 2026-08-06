@@ -15,6 +15,11 @@ function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'short', year: '2-digit' });
 }
 
+// Zahl mit deutschem Komma (7.5 → "7,5")
+function fmtNum(n: number): string {
+  return String(n).replace('.', ',');
+}
+
 export function HistoryView({ ledger }: Props) {
   const { workouts, templates, deleteWorkout } = ledger;
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -111,10 +116,11 @@ export function HistoryView({ ledger }: Props) {
                           {ex.sets.map((s, si) => (
                             <span key={si} className="brutal-card-inset inline-flex items-center gap-1 px-2 py-1 text-xs">
                               <span className="text-text-muted">{si + 1}.</span>
-                              <span className="text-accent font-bold weight-display">{s.weight}</span>
+                              <span className="text-accent font-bold weight-display">{fmtNum(s.weight)}</span>
                               <span className="text-text-dim">kg ×</span>
-                              <span className="text-text font-medium">{s.reps}</span>
-                              {s.notes && <span className="text-warning ml-0.5 truncate max-w-24 italic text-[10px]">{s.notes}</span>}
+                              <span className="text-text font-medium">{fmtNum(s.reps)}</span>
+                              {s.rir != null && <span className="text-warning ml-0.5 text-[10px]">{fmtNum(s.rir)}RIR</span>}
+                              {s.notes && <span className="text-text-muted ml-0.5 truncate max-w-24 italic text-[10px]">{s.notes}</span>}
                             </span>
                           ))}
                         </div>

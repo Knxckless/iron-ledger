@@ -2,10 +2,10 @@
 // v1-Keys (gym-tracker-*) bleiben erhalten bzw. werden weitergenutzt,
 // damit bestehende Daten (228 Seed-Einträge + eigene) nicht verloren gehen.
 
-import type { WorkoutEntry, ExerciseDef, WorkoutTemplate } from '../data/model';
+import type { WorkoutEntry, ExerciseDef, WorkoutTemplate, DietPhase, Routine, Settings } from '../data/model';
 import { PRESET_COLORS, PRESET_LABELS } from '../data/model';
 import { DEFAULT_EXERCISES } from '../data/exerciseLibrary';
-import { seedWorkouts, EXERCISES_BY_TYPE } from '../data/seedData';
+import { EXERCISES_BY_TYPE } from '../data/seedData';
 
 export const KEYS = {
   version: 'iron-ledger-version',
@@ -15,6 +15,11 @@ export const KEYS = {
   exercises: 'iron-ledger-exercises',
   templates: 'iron-ledger-templates',
   metrics: 'iron-ledger-metrics',
+  dietPhases: 'iron-ledger-diet-phases',
+  routines: 'iron-ledger-routines',
+  settings: 'iron-ledger-settings',
+  nutrition: 'iron-ledger-nutrition',
+  draft: 'iron-ledger-draft',                // laufendes (noch nicht gespeichertes) Training
 } as const;
 
 export function readJSON<T>(key: string): T | null {
@@ -40,6 +45,18 @@ export interface MetricEntry {
   value: number;
 }
 
+// Kalorien-/Protein-Log (ein Eintrag pro Tag)
+export interface NutritionEntry {
+  id: string;
+  date: string;
+  kcal: number;              // gegessen (brutto)
+  burned?: number;           // extra verbrannt (Cardio/Sport) → erhöht das Tagesbudget
+  protein?: number;
+}
+
+// Umrechnung Gewichtsänderung ↔ Energie (grobe Konvention ~7700 kcal je kg)
+export const KCAL_PER_KG = 7700;
+
 export const METRIC_INFO: Record<MetricId, { label: string; unit: string }> = {
   weight: { label: 'Gewicht', unit: 'kg' },
   waist: { label: 'Taille', unit: 'cm' },
@@ -51,15 +68,13 @@ export const METRIC_INFO: Record<MetricId, { label: string; unit: string }> = {
 // ===== Migration =====
 
 function migrateWorkouts(): WorkoutEntry[] {
-  let workouts = readJSON<WorkoutEntry[]>(KEYS.workouts);
-  if (!workouts) {
-    workouts = seedWorkouts.map((w, i) => ({ ...w, id: `seed-${i}` })) as WorkoutEntry[];
-  }
-  // label für alte Einträge ergänzen
-  const migrated = workouts.map(w => ({
-    ...w,
-    label: w.label || PRESET_LABELS[w.type] || 'Workout',
-  }));
+  // Start mit leerer Historie (kein Auto-Seed). Vorhandene Einträge werden
+  // beibehalten: label ergänzen + neueste zuerst normalisieren (App-Logik
+  // erwartet workouts[0] = neuestes).
+  const workouts = readJSON<WorkoutEntry[]>(KEYS.workouts) ?? [];
+  const migrated = workouts
+    .map(w => ({ ...w, label: w.label || PRESET_LABELS[w.type] || 'Workout' }))
+    .sort((a, b) => b.date.localeCompare(a.date));
   writeJSON(KEYS.workouts, migrated);
   return migrated;
 }
@@ -115,11 +130,31 @@ function migrateMetrics(): MetricEntry[] {
   return entries;
 }
 
+// Diätphasen: neu in v2.1, existiert bei Altnutzern noch nicht → leeres Array
+function migrateDietPhases(): DietPhase[] {
+  return readJSON<DietPhase[]>(KEYS.dietPhases) ?? [];
+}
+
+// Routinen + Settings: neu, Fallback leer
+function migrateRoutines(): Routine[] {
+  return readJSON<Routine[]>(KEYS.routines) ?? [];
+}
+function migrateSettings(): Settings {
+  return readJSON<Settings>(KEYS.settings) ?? {};
+}
+function migrateNutrition(): NutritionEntry[] {
+  return readJSON<NutritionEntry[]>(KEYS.nutrition) ?? [];
+}
+
 export interface LedgerData {
   workouts: WorkoutEntry[];
   exercises: ExerciseDef[];
   templates: WorkoutTemplate[];
   metrics: MetricEntry[];
+  dietPhases: DietPhase[];
+  routines: Routine[];
+  settings: Settings;
+  nutrition: NutritionEntry[];
 }
 
 export function loadAll(): LedgerData {
@@ -127,8 +162,20 @@ export function loadAll(): LedgerData {
   const exercises = migrateExercises(workouts);
   const templates = migrateTemplates();
   const metrics = migrateMetrics();
+  const dietPhases = migrateDietPhases();
+  const routines = migrateRoutines();
+  const settings = migrateSettings();
+  const nutrition = migrateNutrition();
   localStorage.setItem(KEYS.version, '2');
-  return { workouts, exercises, templates, metrics };
+  return { workouts, exercises, templates, metrics, dietPhases, routines, settings, nutrition };
+}
+
+// Werksreset: löscht alle App-Daten (inkl. Alt-Keys). Nach einem Reload wird
+// die App neu aufgesetzt — leere Historie, Standard-Übungen + Presets.
+export function resetAll() {
+  Object.values(KEYS).forEach(k => localStorage.removeItem(k));
+  localStorage.removeItem('gym-tracker-bodyweight');
+  localStorage.removeItem('gym-tracker-templates');
 }
 
 // ===== Backup: Export / Import =====
@@ -142,6 +189,10 @@ export function exportBackup(): string {
     exercises: readJSON(KEYS.exercises) ?? [],
     templates: readJSON(KEYS.templates) ?? [],
     metrics: readJSON(KEYS.metrics) ?? [],
+    dietPhases: readJSON(KEYS.dietPhases) ?? [],
+    routines: readJSON(KEYS.routines) ?? [],
+    settings: readJSON(KEYS.settings) ?? {},
+    nutrition: readJSON(KEYS.nutrition) ?? [],
   }, null, 2);
 }
 
@@ -155,6 +206,10 @@ export function importBackup(json: string): { ok: boolean; error?: string } {
     if (Array.isArray(data.exercises)) writeJSON(KEYS.exercises, data.exercises);
     if (Array.isArray(data.templates)) writeJSON(KEYS.templates, data.templates);
     if (Array.isArray(data.metrics)) writeJSON(KEYS.metrics, data.metrics);
+    if (Array.isArray(data.dietPhases)) writeJSON(KEYS.dietPhases, data.dietPhases);
+    if (Array.isArray(data.routines)) writeJSON(KEYS.routines, data.routines);
+    if (data.settings && typeof data.settings === 'object') writeJSON(KEYS.settings, data.settings);
+    if (Array.isArray(data.nutrition)) writeJSON(KEYS.nutrition, data.nutrition);
     localStorage.setItem(KEYS.version, '2');
     return { ok: true };
   } catch {
